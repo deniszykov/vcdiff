@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.IO;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
@@ -12,10 +13,9 @@ namespace VCDiff.Encoders
     /// </summary>
     public class VcEncoder : IDisposable
     {
-        private ByteBuffer? oldData;
+        private DictionarySource oldData;
         private ByteStreamReader targetData;
         private Stream outputStream;
-        private Stream sourceStream;
         private RollingHash hasher;
         private int bufferSize;
 
@@ -25,9 +25,9 @@ namespace VCDiff.Encoders
         private int chunkSize;
         private bool disposeRollingHash = false;
 
-        private byte[]? _sourceArray;
+        // Holds the dictionary read from a source stream, in pooled blocks rather than one large array.
+        private RecyclableMemoryStream? _sourceCopy;
         private ArrayPool<byte> _bytePool = ArrayPool<byte>.Shared;
-        private bool _ownsOldData;
 
         /// <summary>
         /// Creates a new VCDIFF Encoder from a source stream. The input streams will not be
@@ -41,20 +41,9 @@ namespace VCDiff.Encoders
         {
             _bytePool = options.BytePoolOrDefault;
 
-            int sourceLength = checked((int)source.Length);
-            _sourceArray = _bytePool.Rent(sourceLength);
-            var sourceMemory = _sourceArray.AsMemory(0, sourceLength);
-            long remaining = sourceLength;
-            long position = 0;
-            while (remaining > 0)
-            {
-                int chunk = (int)Math.Min(remaining, int.MaxValue);
-                source.Read(sourceMemory.Span.Slice((int)position, chunk));
-                position += chunk;
-                remaining -= chunk;
-            }
-            this.oldData = new ByteBuffer(sourceMemory);
-            _ownsOldData = true;
+            _sourceCopy = Pool.MemoryStreamManager.GetStream(nameof(VcEncoder));
+            source.CopyTo(_sourceCopy);
+            this.oldData = new DictionarySource(_sourceCopy.GetReadOnlySequence());
 
             InitializeEncoder(target, outputStream, options);
         }
@@ -92,8 +81,10 @@ namespace VCDiff.Encoders
         public VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, VcEncoderOptions options)
         {
             _bytePool = options.BytePoolOrDefault;
-            this.oldData = buffer;
-            _ownsOldData = false;
+            unsafe
+            {
+                this.oldData = new DictionarySource(buffer.DangerousGetBytePointer(), buffer.Length);
+            }
             InitializeEncoder(target, outputStream, options);
         }
 
@@ -245,10 +236,9 @@ namespace VCDiff.Encoders
 
         private async Task<bool> Encode_Init(bool interleaved, ChecksumFormat checksumFormat, WriteMagicHeader writeBytes)
         {
-            if (targetData.Length == 0 || oldData!.Length == 0)
+            if (targetData.Length == 0 || oldData.Length == 0)
                 return false;
 
-            oldData.Position = 0;
             targetData.Position = 0;
 
             // file header
@@ -269,11 +259,10 @@ namespace VCDiff.Encoders
 
         private void Encode_Setup(bool interleaved, ChecksumFormat checksumFormat, out ChunkEncoder chunkEncoder, out byte[] buffer, out int bufferLength)
         {
-            var dictionary = new BlockHash(oldData!, 0, hasher, blockSize);
+            var dictionary = new BlockHash(oldData, hasher, blockSize);
             dictionary.AddAllBlocks();
-            oldData!.Position = 0;
 
-            chunkEncoder = new ChunkEncoder(dictionary, oldData, hasher, checksumFormat, interleaved, chunkSize);
+            chunkEncoder = new ChunkEncoder(dictionary, oldData.Length, hasher, checksumFormat, interleaved, chunkSize);
             buffer = _bytePool.Rent(bufferSize);
             bufferLength = bufferSize;
         }
@@ -283,12 +272,9 @@ namespace VCDiff.Encoders
         /// </summary>
         public void Dispose()
         {
-            if (_ownsOldData && oldData != null)
-            {
-                oldData.Dispose();
-                if (_sourceArray != null)
-                    _bytePool.Return(_sourceArray, false);
-            }
+            oldData?.Dispose();
+            _sourceCopy?.Dispose();
+            _sourceCopy = null;
             targetData?.Dispose();
             if (this.disposeRollingHash)
                 this.hasher.Dispose();

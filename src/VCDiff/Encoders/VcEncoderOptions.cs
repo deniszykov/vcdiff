@@ -1,9 +1,10 @@
 using System.Buffers;
+using VCDiff.Shared;
 
 namespace VCDiff.Encoders
 {
     /// <summary>
-    /// Options for configuring a <see cref="VcEncoder"/>.
+    /// Options for configuring a <see cref="VcEncoder"/> or <see cref="VcDiffEncoder"/>.
     /// </summary>
     public class VcEncoderOptions
     {
@@ -30,6 +31,16 @@ namespace VCDiff.Encoders
         /// disposing it.
         /// </summary>
         public RollingHash? RollingHash { get; set; }
+
+        /// <summary>
+        /// Whether to emit the SDCH interleaved format.
+        /// </summary>
+        public bool Interleaved { get; set; }
+
+        /// <summary>
+        /// The checksum format to emit for each window.
+        /// </summary>
+        public ChecksumFormat ChecksumFormat { get; set; }
 
         /// <summary>
         /// The <see cref="ArrayPool{T}"/> used to rent internal byte buffers. When

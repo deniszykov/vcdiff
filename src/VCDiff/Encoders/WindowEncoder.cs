@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
+using Microsoft.IO;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
@@ -13,24 +14,24 @@ namespace VCDiff.Encoders
         private long targetLength;
         private CodeTable table;
         private int lastOpcodeIndex;
+        private byte lastOpcode;
         private AddressCache addrCache;
         private InstructionMap instrMap;
-        private MemoryStream instructionAndSizes;
-        private MemoryStream dataForAddAndRun;
-        private MemoryStream addressForCopy;
+        // Pooled, block based streams: a window never needs one contiguous buffer.
+        private RecyclableMemoryStream instructionAndSizes;
+        private RecyclableMemoryStream dataForAddAndRun;
+        private RecyclableMemoryStream addressForCopy;
 
         public ChecksumFormat ChecksumFormat { get; }
 
         public bool IsInterleaved { get; }
 
-        public uint Checksum { get; }
+        public uint Checksum { get; private set; }
 
         //This is a window encoder for the VCDIFF format
-        //if you are not including a checksum simply pass 0 to checksum
-        //it will be ignored
-        public WindowEncoder(long dictionarySize, uint checksum, ChecksumFormat checksumFormat, bool interleaved)
+        //it is reused for every window, call Reset before encoding each one
+        public WindowEncoder(long dictionarySize, ChecksumFormat checksumFormat, bool interleaved)
         {
-            this.Checksum = checksum;
             this.ChecksumFormat = checksumFormat;
             this.IsInterleaved = interleaved;
             this.dictionarySize = dictionarySize;
@@ -47,14 +48,37 @@ namespace VCDiff.Encoders
             //Separate buffers for each type if not interleaved
             if (!interleaved)
             {
-                instructionAndSizes = new MemoryStream();
-                dataForAddAndRun = new MemoryStream();
-                addressForCopy = new MemoryStream();
+                instructionAndSizes = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
+                dataForAddAndRun = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
+                addressForCopy = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
             }
             else
             {
-                instructionAndSizes = dataForAddAndRun = addressForCopy = new MemoryStream();
+                instructionAndSizes = dataForAddAndRun = addressForCopy = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
             }
+        }
+
+        /// <summary>
+        /// Starts a new window.
+        /// </summary>
+        /// <param name="checksum">The checksum of the window, ignored if no checksum format is used.</param>
+        public void Reset(uint checksum)
+        {
+            this.Checksum = checksum;
+            addrCache = new AddressCache();
+            targetLength = 0;
+            lastOpcodeIndex = -1;
+            dataForAddAndRun.SetLength(0);
+            instructionAndSizes.SetLength(0);
+            addressForCopy.SetLength(0);
+        }
+
+        private void ReplaceLastOpcode(byte opcode)
+        {
+            long end = instructionAndSizes.Position;
+            instructionAndSizes.Position = lastOpcodeIndex;
+            instructionAndSizes.WriteByte(opcode);
+            instructionAndSizes.Position = end;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -62,7 +86,7 @@ namespace VCDiff.Encoders
         {
             if (lastOpcodeIndex >= 0)
             {
-                int lastOp = instructionAndSizes.GetBuffer()[lastOpcodeIndex];
+                int lastOp = lastOpcode;
 
                 int compoundOp;
                 if (size <= byte.MaxValue)
@@ -70,7 +94,7 @@ namespace VCDiff.Encoders
                     compoundOp = instrMap.LookSecondOpcode((byte)lastOp, (byte)inst, (byte)size, mode);
                     if (compoundOp != CodeTable.kNoOpcode)
                     {
-                        instructionAndSizes.GetBuffer()[lastOpcodeIndex] = (byte)compoundOp;
+                        ReplaceLastOpcode((byte)compoundOp);
                         lastOpcodeIndex = -1;
                         return;
                     }
@@ -79,7 +103,7 @@ namespace VCDiff.Encoders
                 compoundOp = instrMap.LookSecondOpcode((byte)lastOp, (byte)inst, 0, mode);
                 if (compoundOp != CodeTable.kNoOpcode)
                 {
-                    instructionAndSizes.GetBuffer()[lastOpcodeIndex] = (byte)compoundOp;
+                    ReplaceLastOpcode((byte)compoundOp);
                     //append size to instructionAndSizes
                     VarIntBE.AppendInt32(size, instructionAndSizes);
                     lastOpcodeIndex = -1;
@@ -94,6 +118,7 @@ namespace VCDiff.Encoders
                 if (opcode != CodeTable.kNoOpcode)
                 {
                     instructionAndSizes.WriteByte((byte)opcode);
+                    lastOpcode = (byte)opcode;
                     lastOpcodeIndex = (int)instructionAndSizes.Length - 1;
                     return;
                 }
@@ -105,6 +130,7 @@ namespace VCDiff.Encoders
             }
 
             instructionAndSizes.WriteByte((byte)opcode);
+            lastOpcode = (byte)opcode;
             lastOpcodeIndex = (int)instructionAndSizes.Length - 1;
             VarIntBE.AppendInt32(size, instructionAndSizes);
         }
@@ -225,9 +251,9 @@ namespace VCDiff.Encoders
                     }
                 }
 
-                outputStream.Write(dataForAddAndRun.GetBuffer().AsSpanFast((int)dataForAddAndRun.Length)); //data section for adds and runs
-                outputStream.Write(instructionAndSizes.GetBuffer().AsSpanFast((int)instructionAndSizes.Length)); //data for instructions and sizes
-                outputStream.Write(addressForCopy.GetBuffer().AsSpanFast((int)addressForCopy.Length)); //data for addresses section copys
+                dataForAddAndRun.WriteTo(outputStream); //data section for adds and runs
+                instructionAndSizes.WriteTo(outputStream); //data for instructions and sizes
+                addressForCopy.WriteTo(outputStream); //data for addresses section copys
             }
             else
             {
@@ -242,7 +268,7 @@ namespace VCDiff.Encoders
                     VarIntBE.AppendInt64(Checksum, outputStream);
                 }
 
-                outputStream.Write(instructionAndSizes.GetBuffer().AsSpan(0, (int)instructionAndSizes.Length)); //data for instructions and sizes, in interleaved it is everything
+                instructionAndSizes.WriteTo(outputStream); //data for instructions and sizes, in interleaved it is everything
             }
 
             //end of delta encoding
@@ -264,8 +290,11 @@ namespace VCDiff.Encoders
         public void Dispose()
         {
             instructionAndSizes.Dispose();
-            dataForAddAndRun.Dispose();
-            addressForCopy.Dispose();
+            if (!IsInterleaved)
+            {
+                dataForAddAndRun.Dispose();
+                addressForCopy.Dispose();
+            }
         }
     }
 }

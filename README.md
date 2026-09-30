@@ -60,6 +60,136 @@ var decoderOptions = new VcDecoderOptions
 using var decoder = new VcDecoder(dictStream, deltaStream, outputStream, decoderOptions);
 ```
 
+## Usage
+
+The examples below diff `fileB.bin` against `fileA.bin` into `diff.bin`, then rebuild
+`fileB.bin` from `fileA.bin` + `diff.bin`. `fileA.bin` is the **dictionary** (the old/base
+file); the delta references it by offset and never embeds it.
+
+### Legacy `Stream` API
+
+```csharp
+using System.IO;
+using VCDiff.Decoders;
+using VCDiff.Encoders;
+using VCDiff.Includes;
+
+// Encode: diff.bin = fileB.bin - fileA.bin
+using (var dict   = File.OpenRead("fileA.bin"))
+using (var target = File.OpenRead("fileB.bin"))
+using (var delta  = File.Create("diff.bin"))
+{
+    using var encoder = new VcEncoder(dict, target, delta);
+    if (encoder.Encode() != VCDiffResult.SUCCESS)
+        throw new InvalidOperationException("Encoding failed.");
+}
+
+// Decode: fileB.bin = fileA.bin + diff.bin
+using (var dict   = File.OpenRead("fileA.bin"))
+using (var delta  = File.OpenRead("diff.bin"))
+using (var target = File.Create("fileB.decoded.bin"))
+{
+    using var decoder = new VcDecoder(dict, delta, target);
+    if (decoder.Decode(out _) != VCDiffResult.SUCCESS)
+        throw new InvalidOperationException("Decoding failed.");
+}
+```
+
+### Streaming span API
+
+```csharp
+using System;
+using System.Buffers;
+using System.IO;
+using VCDiff;
+using VCDiff.Decoders;
+using VCDiff.Encoders;
+
+// The dictionary is pinned in place (not copied), so it must stay alive and unchanged
+// until the encoder/decoder is disposed.
+
+// Encode: diff.bin = fileB.bin - fileA.bin
+using (var dictStream = VcDiff.ReadDictionary(File.OpenRead("fileA.bin")))
+{
+    ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
+    using var encoder = new VcDiffEncoder(dictionary);
+    using var delta = File.Create("diff.bin");
+    Encode(encoder, File.OpenRead("fileB.bin"), delta);
+}
+
+// Decode: fileB.bin = fileA.bin + diff.bin
+using (var dictStream = VcDiff.ReadDictionary(File.OpenRead("fileA.bin")))
+{
+    ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
+    using var decoder = new VcDiffDecoder(dictionary);
+    using var target = File.Create("fileB.decoded.bin");
+    Decode(decoder, File.OpenRead("diff.bin"), target);
+}
+
+static void Encode(VcDiffEncoder encoder, Stream source, Stream destination)
+{
+    var readBuf  = new byte[64 * 1024];
+    var writeBuf = new byte[64 * 1024];
+
+    while (true)
+    {
+        int read = source.Read(readBuf, 0, readBuf.Length);
+        if (read == 0) break;
+
+        var input = readBuf.AsSpan(0, read);
+        while (input.Length > 0)
+        {
+            var status = encoder.Encode(input, writeBuf, out int consumed, out int written, isFinal: false);
+            destination.Write(writeBuf, 0, written);
+            input = input.Slice(consumed);
+            if (status == OperationStatus.DestinationTooSmall) continue; // writeBuf full; drain again
+            if (status == OperationStatus.NeedMoreData) break;           // input consumed; read next chunk
+            // Done: a window was emitted; continue with the remaining input.
+        }
+    }
+
+    // Flush the final (possibly partial) window.
+    while (true)
+    {
+        var status = encoder.Encode(ReadOnlySpan<byte>.Empty, writeBuf, out _, out int written, isFinal: true);
+        destination.Write(writeBuf, 0, written);
+        if (status == OperationStatus.Done) break;
+    }
+}
+
+static void Decode(VcDiffDecoder decoder, Stream source, Stream destination)
+{
+    var readBuf  = new byte[64 * 1024];
+    var writeBuf = new byte[64 * 1024];
+
+    while (true)
+    {
+        int read = source.Read(readBuf, 0, readBuf.Length);
+        if (read == 0) break;
+
+        var input = readBuf.AsSpan(0, read);
+        while (input.Length > 0)
+        {
+            var status = decoder.Decode(input, writeBuf, out int consumed, out int written, isFinal: false);
+            destination.Write(writeBuf, 0, written);
+            input = input.Slice(consumed);
+            if (status == OperationStatus.InvalidData) throw new InvalidDataException("Corrupt delta.");
+            // NeedMoreData: all input was consumed (input is now empty).
+            // DestinationTooSmall: writeBuf full; continue with the remaining input.
+        }
+    }
+
+    // Final call marks end of stream and drains any remaining output.
+    while (true)
+    {
+        var status = decoder.Decode(ReadOnlySpan<byte>.Empty, writeBuf, out _, out int written, isFinal: true);
+        destination.Write(writeBuf, 0, written);
+        if (status == OperationStatus.InvalidData) throw new InvalidDataException("Corrupt delta.");
+        if (status == OperationStatus.Done) break;
+    }
+}
+```
+
 <details><summary>The original readme, with some changes to the API usage examples</summary>
 <p>
 

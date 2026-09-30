@@ -322,8 +322,8 @@ namespace VCDiff.Decoders
             // Copy all data from source segment
             if (decodedAddress + size <= window.SourceSegmentLength)
             {
-                source.Position = decodedAddress + window.SourceSegmentOffset;
-                targetData.Write(source.ReadBytesAsSpan(size));
+                if (!CopyFromSource(decodedAddress + window.SourceSegmentOffset, size))
+                    return VCDiffResult.ERROR;
                 this.TotalBytesDecoded += size;
                 return VCDiffResult.SUCCESS;
             }
@@ -333,8 +333,8 @@ namespace VCDiff.Decoders
             {
                 // ... plus some data from source segment
                 long partialCopySize = window.SourceSegmentLength - decodedAddress;
-                source.Position = decodedAddress + window.SourceSegmentOffset;
-                targetData.Write(source.ReadBytesAsSpan((int)partialCopySize));
+                if (!CopyFromSource(decodedAddress + window.SourceSegmentOffset, partialCopySize))
+                    return VCDiffResult.ERROR;
                 this.TotalBytesDecoded += partialCopySize;
                 decodedAddress += partialCopySize;
                 size -= (int)partialCopySize;
@@ -363,6 +363,25 @@ namespace VCDiff.Decoders
             }
             return VCDiffResult.SUCCESS;
 
+        }
+
+        // Read the source in small pieces so a stream backed source never allocates a buffer as large as the copy.
+        private const int MaxSourceRead = 8192;
+
+        private bool CopyFromSource(long position, long size)
+        {
+            source.Position = position;
+            while (size > 0)
+            {
+                var bytes = source.ReadBytesAsSpan((int)Math.Min(size, MaxSourceRead));
+                if (bytes.IsEmpty)
+                    return false;
+
+                targetData.Write(bytes);
+                size -= bytes.Length;
+            }
+
+            return true;
         }
 
         private VCDiffResult DecodeRun(int size, ByteBuffer addRun)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using VCDiff.Includes;
@@ -38,7 +38,7 @@ namespace VCDiff.Shared
             return (int)VCDiffResult.EOD;
         }
 
-        public static int ParseInt32(Span<byte> sin, out int bytesConsumed)
+        public static int ParseInt32(ReadOnlySpan<byte> sin, out int bytesConsumed)
         {
             bytesConsumed = 0;
             int result = 0;
@@ -66,6 +66,36 @@ namespace VCDiff.Shared
             }
 
             return (int)VCDiffResult.EOD;
+        }
+
+        public static long ParseInt64(ReadOnlySpan<byte> sin, out int bytesConsumed)
+        {
+            bytesConsumed = 0;
+            long result = 0;
+            int index = 0;
+
+            while (index < sin.Length)
+            {
+                byte currentByte = sin[index];
+                result += currentByte & 0x7F;
+
+                if ((currentByte & 0x80) == 0)
+                {
+                    bytesConsumed = index + 1;
+                    return result;
+                }
+
+                if (result > (int64MaxValue >> 7))
+                {
+                    bytesConsumed = index + 1;
+                    return (long)VCDiffResult.ERROR;
+                }
+
+                result = result << 7;
+                index++;
+            }
+
+            return (long)VCDiffResult.EOD;
         }
 
         public static long ParseInt64<TByteBuffer>(TByteBuffer sin) where TByteBuffer : IByteBuffer

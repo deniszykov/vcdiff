@@ -161,6 +161,8 @@ namespace VCDiff.Shared
         public void Dispose()
         {
             this.byteHandle?.Dispose();
+            this.byteHandle = null;
+
             GC.SuppressFinalize(this);
         }
     }
