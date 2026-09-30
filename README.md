@@ -22,6 +22,24 @@ Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been 
 
 Wherever possible, SSE3 or AVX2 extensions are used on supported systems. Speeds are comparable, albeit slightly slower than the native xdelta3, depending on the chosen blocksize. A lot of work has gone into optimizing out the overhead of garbage collection and memory access through `Memory<T>`, as well as parallelizing computational work with SIMD extensions.
 
+## Why this fork exists
+
+This fork modernizes and de-clutters [SnowflakePowered/vcdiff](https://github.com/SnowflakePowered/vcdiff)
+while keeping its performance:
+
+- **Lighter dependencies and smaller build** — the ~2 MiB `SharpCompress` package was replaced with a
+  minimal, vendored XZ/LZMA2 decompressor, and unused packages were dropped, shrinking the deployed
+  footprint by ~95%.
+- **Modern, focused targets** — `netcoreapp3.1` and `net8.0` only, with legacy `netstandard`
+  targets and their `#if` fallbacks removed.
+- **Modern, allocation-conscious APIs** — configurable buffer pooling
+  (`VcEncoderOptions`/`VcDecoderOptions`) and a streaming span-based encode/decode API
+  (`VcDiffEncoder`/`VcDiffDecoder`).
+- **Same fast paths** — the upstream SIMD/unsafe encode and decode paths are preserved.
+
+The code in this repository was developed and reviewed with the assistance of LLM agents
+(DeepSeek and ClaudeCode), under the direction of Denis Zykov.
+
 ## Changes in this fork
 
 This fork keeps the fast SIMD/unsafe encode and decode paths from upstream while trimming the dependency surface:
