@@ -3,240 +3,225 @@
 
 using System;
 using System.Buffers;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-namespace VCDiff.Encoders
+
+namespace VCDiff.Encoders;
+
+/// <summary>
+///     A rolling hasher for <see cref="VcEncoder" />.
+///     <see cref="RollingHash" /> may be reused
+/// </summary>
+public class RollingHash : IDisposable
 {
+	private const int K_BASE = 1 << 23;
+	private const int K_MULT = 257;
+	private const byte S1_O32 = (1 << 6) | (0 << 4) | (3 << 2) | 2;
+
+	private const byte S23_O1 = (2 << 6) | (3 << 4) | (0 << 2) | 1;
+	private const byte SO123 = (0 << 6) | (1 << 4) | (2 << 2) | 3;
+	private const byte SOO2_O = (0 << 6) | (0 << 4) | (2 << 2) | 0;
+	private readonly int[] kMultFactors;
+	private readonly unsafe int* kMultFactorsPtr;
+	private readonly ulong multiplier;
+
+	private readonly ulong[] removeTable;
+
+	private readonly Vector256<int> vShuf;
+	private MemoryHandle kMultFactorsHandle;
+
     /// <summary>
-    /// A rolling hasher for <see cref="VcEncoder"/>.
-    /// <see cref="RollingHash"/> may be reused 
+    ///     The window size for this rolling hash.
     /// </summary>
-    public class RollingHash : IDisposable
-    {
-        private const int kMult = 257;
-        private const int kBase = (1 << 23);
+    public int WindowSize { get; }
+    /// <summary>
+    ///     Manually creates a rolling hash instance for use with a <see cref="VcEncoder" />.
+    ///     This object must be disposed because it allocates pinned memory that will never be garbage collected
+    ///     if it is not disposed.
+    /// </summary>
+    /// <param name="size">The window size to use for this hashing instance.</param>
+    public RollingHash(int size)
+	{
+		this.vShuf = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
+		this.WindowSize = size;
+		this.removeTable = new ulong[256];
+		this.kMultFactors = new int[size];
+		this.kMultFactorsHandle = this.kMultFactors.AsMemory().Pin();
+		unsafe
+		{
+			this.kMultFactorsPtr = (int*)this.kMultFactorsHandle.Pointer;
+		}
 
-        private ulong[] removeTable;
-        private int[] kMultFactors;
-        private MemoryHandle kMultFactorsHandle;
-        private unsafe int* kMultFactorsPtr;
-        private ulong multiplier;
+		this.multiplier = 1;
 
-        private const byte S23O1 = (((2) << 6) | ((3) << 4) | ((0) << 2) | ((1)));
-        private const byte S1O32 = (((1) << 6) | ((0) << 4) | ((3) << 2) | ((2)));
-        private const byte SO123 = (((0) << 6) | ((1) << 4) | ((2) << 2) | ((3)));
-        private const byte SOO2O = (((0) << 6) | ((0) << 4) | ((2) << 2) | ((0)));
+		for (var i = 0; i < size - 1; ++i)
+		{
+			this.kMultFactors[i] = (int)this.multiplier;
+			this.multiplier = (this.multiplier * K_MULT) & (K_BASE - 1);
+		}
 
-        private readonly Vector256<int> v_shuf;
-        /// <summary>
-        /// Manually creates a rolling hash instance for use with a <see cref="VcEncoder"/>.
-        /// This object must be disposed because it allocates pinned memory that will never be garbage collected
-        /// if it is not disposed.
-        /// </summary>
-        /// <param name="size">The window size to use for this hashing instance.</param>
-        public RollingHash(int size)
-        {
+		this.kMultFactors[size - 1] = (int)this.multiplier;
 
-            v_shuf = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
-            this.WindowSize = size;
-            removeTable = new ulong[256];
-            kMultFactors = new int[size];
-            kMultFactorsHandle = kMultFactors.AsMemory().Pin();
-            unsafe
-            {
-                kMultFactorsPtr = (int*)kMultFactorsHandle.Pointer;
-            }
-            multiplier = 1;
+		ulong byteTimes = 0;
+		for (var i = 0; i < 256; ++i)
+		{
+			// Get the inverse of the modBase
+			this.removeTable[i] = (0 - byteTimes) & (K_BASE - 1);
+			byteTimes = (byteTimes + this.multiplier) & (K_BASE - 1);
+		}
+	}
 
-            for (int i = 0; i < size - 1; ++i)
-            {
-                kMultFactors[i] = (int)multiplier;
-                multiplier = (multiplier * kMult) & (kBase - 1);
-            }
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private unsafe ulong HashAvx2(byte* buf, int len)
+	{
+		ulong h = 0;
 
-            kMultFactors[size - 1] = (int)multiplier;
+		var vPs = Vector256<int>.Zero;
 
-            ulong byteTimes = 0;
-            for (int i = 0; i < 256; ++i)
-            {
-                // Get the inverse of the modBase
-                removeTable[i] = (0 - byteTimes) & (kBase - 1);
-                byteTimes = (byteTimes + multiplier) & (kBase - 1);
-            }
-        }
+		var i = 0;
+		for (var j = len - i - 1; len - i >= 8; i += 8, j = len - i - 1)
+		{
+			var cV = Avx.LoadVector256(&this.kMultFactorsPtr[j - 7]);
+			cV = Avx2.PermuteVar8x32(cV, this.vShuf);
 
-        /// <summary>
-        /// The window size for this rolling hash.
-        /// </summary>
-        public int WindowSize { get; }
+			var qV = Sse2.LoadVector128(buf + i);
+			var sV = Avx2.ConvertToVector256Int32(qV);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe ulong HashAvx2(byte* buf, int len)
-        {
-            ulong h = 0;
-            
-            Vector256<int> v_ps = Vector256<int>.Zero;
+			vPs = Avx2.Add(vPs, Avx2.MultiplyLow(cV, sV));
+		}
 
-            int i = 0;
-            for (int j = len - i - 1; len - i >= 8; i += 8, j = len - i - 1)
-            {
-                Vector256<int> c_v = Avx.LoadVector256(&kMultFactorsPtr[j - 7]);
-                c_v = Avx2.PermuteVar8x32(c_v, v_shuf);
+		var v128S1 = Sse2.Add(Avx2.ExtractVector128(vPs, 0), Avx2.ExtractVector128(vPs, 1));
+		v128S1 = Sse2.Add(v128S1, Sse2.Shuffle(v128S1, S23_O1));
+		v128S1 = Sse2.Add(v128S1, Sse2.Shuffle(v128S1, S1_O32));
+		h += Sse2.ConvertToUInt32(v128S1.AsUInt32());
 
-                Vector128<byte> q_v = Sse2.LoadVector128(buf + i);
-                Vector256<int> s_v = Avx2.ConvertToVector256Int32(q_v);
+		for (; i < len; i++)
+		{
+			var index = len - i - 1;
+			ulong c = (uint)this.kMultFactors[index];
+			h += c * buf[i];
+		}
 
-                v_ps = Avx2.Add(v_ps, Avx2.MultiplyLow(c_v, s_v));
-            }
+		return h & (K_BASE - 1);
+	}
 
-            Vector128<int> v128_s1 = Sse2.Add(Avx2.ExtractVector128(v_ps, 0), Avx2.ExtractVector128(v_ps, 1));
-            v128_s1 = Sse2.Add(v128_s1, Sse2.Shuffle(v128_s1, S23O1));
-            v128_s1 = Sse2.Add(v128_s1, Sse2.Shuffle(v128_s1, S1O32));
-            h += Sse2.ConvertToUInt32(v128_s1.AsUInt32());
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private unsafe ulong HashSse(byte* buf, int len)
+	{
+		ulong h = 0;
+		var vPs = Vector128<int>.Zero;
+		var useSse4 = Sse41.IsSupported;
 
-            for (; i < len; i++)
-            {
-                int index = len - i - 1;
-                ulong c = (uint)kMultFactors[index];
-                h += c * buf[i];
-            }
+		var i = 0;
+		for (var j = len - i - 1; len - i >= 4; i += 4, j = len - i - 1)
+		{
+			var cV = Sse2.LoadVector128(&this.kMultFactorsPtr[j - 3]);
+			cV = Sse2.Shuffle(cV, SO123);
+			var qV = Sse2.LoadVector128(buf + i);
 
-            return h & (kBase - 1);
-        }
+			Vector128<int> sV;
+			if (useSse4)
+				sV = Sse41.ConvertToVector128Int32(qV);
+			else
+			{
+				qV = Sse2.UnpackLow(qV, qV);
+				sV = Sse2.ShiftRightLogical(Sse2.UnpackLow(qV.AsUInt16(), qV.AsUInt16()).AsInt32(), 24);
+			}
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe ulong HashSse(byte* buf, int len)
-        {
-            ulong h = 0;
-            Vector128<int> v_ps = Vector128<int>.Zero;
-            bool useSse4 = Sse41.IsSupported;
+			if (useSse4)
+				vPs = Sse2.Add(vPs, Sse41.MultiplyLow(cV, sV));
+			else
+			{
+				var vTmp1 = Sse2.Multiply(cV.AsUInt32(), sV.AsUInt32());
+				var vTmp2 =
+					Sse2.Multiply(Sse2.ShiftRightLogical128BitLane(cV.AsByte(), 4).AsUInt32(),
+						Sse2.ShiftRightLogical128BitLane(sV.AsByte(), 4).AsUInt32());
+				;
+				vPs = Sse2.Add(vPs, Sse2.UnpackLow(Sse2.Shuffle(vTmp1.AsInt32(), SOO2_O),
+					Sse2.Shuffle(vTmp2.AsInt32(), SOO2_O)));
+			}
+		}
 
-            int i = 0;
-            for (int j = len - i - 1; len - i >= 4; i += 4, j = len - i - 1)
-            {
-                Vector128<int> c_v = Sse2.LoadVector128(&kMultFactorsPtr[j - 3]);
-                c_v = Sse2.Shuffle(c_v, SO123);
-                Vector128<byte> q_v = Sse2.LoadVector128(buf + i);
+		vPs = Sse2.Add(vPs, Sse2.Shuffle(vPs, S23_O1));
+		vPs = Sse2.Add(vPs, Sse2.Shuffle(vPs, S1_O32));
+		h += Sse2.ConvertToUInt32(vPs.AsUInt32());
 
-                Vector128<int> s_v;
-                if (useSse4)
-                {
-                    s_v = Sse41.ConvertToVector128Int32(q_v);
-                }
-                else
-                {
-                    q_v = Sse2.UnpackLow(q_v, q_v);
-                    s_v = Sse2.ShiftRightLogical(Sse2.UnpackLow(q_v.AsUInt16(), q_v.AsUInt16()).AsInt32(), 24);
-                }
+		for (; i < len; i++)
+		{
+			var index = len - i - 1;
+			ulong c = (uint)this.kMultFactors[index];
+			h += c * buf[i];
+		}
 
-                if (useSse4)
-                {
-                    v_ps = Sse2.Add(v_ps, Sse41.MultiplyLow(c_v, s_v));
-                }
-                else
-                {
-                    
-                    Vector128<ulong> v_tmp1 = Sse2.Multiply(c_v.AsUInt32(), s_v.AsUInt32());
-                    Vector128<ulong> v_tmp2 =
-                        Sse2.Multiply(Sse2.ShiftRightLogical128BitLane(c_v.AsByte(), 4).AsUInt32(),
-                            Sse2.ShiftRightLogical128BitLane(s_v.AsByte(), 4).AsUInt32());
-                    ;
-                    v_ps = Sse2.Add(v_ps, Sse2.UnpackLow(Sse2.Shuffle(v_tmp1.AsInt32(), SOO2O),
-                        Sse2.Shuffle(v_tmp2.AsInt32(), SOO2O)));
-                }
-            }
+		return h & (K_BASE - 1);
+	}
+    /// <summary>
+    ///     Generate a new hash from the bytes
+    ///     The formula for calculating h is
+    ///     h(0) = 1
+    ///     h(n) = SUM {i=0}^{n-1} c^{n - i - 1} S[i]
+    ///     where n is the length of S, and c is kMult.
+    ///     In code,
+    ///     h(n) = Sum(i: 0, n: len - 1, i => kMult ** (len - i - 1) span[i])
+    ///     The final result is then MODded using binary and with kBase.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+	internal unsafe ulong Hash(byte* buf, int len)
+	{
+		if (len == 0) return 1;
+		if (len == 1) return buf[0] * (uint)K_MULT;
 
-            v_ps = Sse2.Add(v_ps, Sse2.Shuffle(v_ps, S23O1));
-            v_ps = Sse2.Add(v_ps, Sse2.Shuffle(v_ps, S1O32));
-            h += Sse2.ConvertToUInt32(v_ps.AsUInt32());
+		if (Avx2.IsSupported && len >= 8) return this.HashAvx2(buf, len);
+		if (Sse41.IsSupported && len >= 4) return this.HashSse(buf, len);
 
-            for (; i < len; i++)
-            {
-                int index = len - i - 1;
-                ulong c = (uint)kMultFactors[index];
-                h += c * buf[i];
-            }
+		ulong h = 0;
 
-            return h & (kBase - 1);
-        }
-        /// <summary>
-        /// Generate a new hash from the bytes
-        /// 
-        /// The formula for calculating h is
-        /// h(0) = 1
-        /// h(n) = SUM {i=0}^{n-1} c^{n - i - 1} S[i]
-        /// 
-        /// where n is the length of S, and c is kMult.
-        /// 
-        /// In code,
-        /// h(n) = Sum(i: 0, n: len - 1, i => kMult ** (len - i - 1) span[i])
-        /// 
-        /// The final result is then MODded using binary and with kBase.
-        /// 
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        internal unsafe ulong Hash(byte* buf, int len)
-        {
+		//// Old Version 
+		//ulong hi = (span[0] * (uint)kMult) + span[1];
 
-            if (len == 0) return 1;
-            if (len == 1) return buf[0] * (uint)kMult;
+		//for (int j = 2; j < len; j++)
+		//{
+		//    hi = ((hi * kMult) + span[j]) & (kBase - 1);
+		//}
 
+		for (var i = 0; i < len; i++)
+		{
+			var index = len - i - 1;
+			ulong c = (uint)this.kMultFactors[index];
+			h += c * buf[i];
+		}
 
-            if (Avx2.IsSupported && len >= 8) return HashAvx2(buf, len);
-            if (Sse41.IsSupported && len >= 4) return HashSse(buf, len);
-            ulong h = 0;
+		return h & (K_BASE - 1);
+	}
 
-            //// Old Version 
-            //ulong hi = (span[0] * (uint)kMult) + span[1];
+    /// <summary>
+    ///     Rolling update for the hash
+    ///     First byte must be the first bytee that was used in the data
+    ///     that was last encoded
+    ///     new byte is the first byte position + Size
+    /// </summary>
+    /// <param name="oldHash">the original hash</param>
+    /// <param name="firstByte">the original byte of the data for the first hash</param>
+    /// <param name="newByte">the first byte of the new data to hash</param>
+    /// <returns></returns>
+    [SkipLocalsInit, MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public ulong UpdateHash(ulong oldHash, byte firstByte, byte newByte)
+	{
+		// Remove the first byte from the hash
+		var partial = (oldHash + this.removeTable[firstByte]) & (K_BASE - 1);
 
-            //for (int j = 2; j < len; j++)
-            //{
-            //    hi = ((hi * kMult) + span[j]) & (kBase - 1);
-            //}
+		// Do the hash step
+		return (partial * K_MULT + newByte) & (K_BASE - 1);
+	}
 
-            for (int i = 0; i < len; i++)
-            {
-                int index = len - i - 1;
-                ulong c = (uint)kMultFactors[index];
-                h += c * buf[i];
-            }
-
-
-            return h & (kBase - 1);
-        }
-
-        /// <summary>
-        /// Rolling update for the hash
-        /// First byte must be the first bytee that was used in the data
-        /// that was last encoded
-        /// new byte is the first byte position + Size
-        /// </summary>
-        /// <param name="oldHash">the original hash</param>
-        /// <param name="firstByte">the original byte of the data for the first hash</param>
-        /// <param name="newByte">the first byte of the new data to hash</param>
-        /// <returns></returns>
-        [SkipLocalsInit]
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ulong UpdateHash(ulong oldHash, byte firstByte, byte newByte)
-        {
-            // Remove the first byte from the hash
-            ulong partial = (oldHash + removeTable[firstByte]) & (kBase - 1);
-
-            // Do the hash step
-            return (partial * kMult + newByte) & (kBase - 1);
-        }
-
-        /// <summary>
-        /// Dispose the rolling hash instance.
-        ///
-        /// You must always dispose a manually created hashing instance, or memory leaks will occur.
-        /// For performance purposes, 
-        /// </summary>
-        public void Dispose()
-        {
-            kMultFactorsHandle.Dispose();
-        }
-    }
+    /// <summary>
+    ///     Dispose the rolling hash instance.
+    ///     You must always dispose a manually created hashing instance, or memory leaks will occur.
+    ///     For performance purposes,
+    /// </summary>
+    public void Dispose()
+	{
+		this.kMultFactorsHandle.Dispose();
+	}
 }

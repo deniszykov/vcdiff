@@ -1,28 +1,23 @@
-// Copyright (c) Metric and the Snowflake Authors.
+﻿// Copyright (c) Metric and the Snowflake Authors.
 // Licensed under the Apache License, Version 2.0.
 
-using System;
-using System.Collections.Generic;
-using System.Text;
+namespace VCDiff.Shared;
 
-namespace VCDiff.Shared
+/// <summary>
+///     Which checksum format to output.
+/// </summary>
+public enum ChecksumFormat
 {
     /// <summary>
-    /// Which checksum format to output.
+    ///     Do not emit a checksum.
     /// </summary>
-    public enum ChecksumFormat
-    {
-        /// <summary>
-        /// Do not emit a checksum.
-        /// </summary>
-        None,
-        /// <summary>
-        /// Emit a Google compatible SDCH checksum.
-        /// </summary>
-        SDCH,
-        /// <summary>
-        /// Emit an Xdelta3 checksum.
-        /// </summary>
-        Xdelta3
-    }
+    None,
+    /// <summary>
+    ///     Emit a Google compatible SDCH checksum.
+    /// </summary>
+    SDCH,
+    /// <summary>
+    ///     Emit an Xdelta3 checksum.
+    /// </summary>
+    Xdelta3
 }

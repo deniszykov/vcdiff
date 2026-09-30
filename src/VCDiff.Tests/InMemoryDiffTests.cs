@@ -7,81 +7,81 @@ using VCDiff.Includes;
 using VCDiff.Shared;
 using Xunit;
 
-namespace VCDiff.Tests
+namespace VCDiff.Tests;
+
+public class InMemoryDiffTests
 {
-    public class InMemoryDiffTests
-    {
-        private static readonly ReadOnlyMemory<byte> ADiffData = Encoding.UTF8.GetBytes("Hello World");
-        private static readonly ReadOnlyMemory<byte> BDiffData = Encoding.UTF8.GetBytes("Goodbye World");
+	private static readonly ReadOnlyMemory<byte> ADiffData = Encoding.UTF8.GetBytes("Hello World");
+	private static readonly ReadOnlyMemory<byte> BDiffData = Encoding.UTF8.GetBytes("Goodbye World");
 
-        [Fact]
-        public void NoChecksumNoInterleaved_Test()
-        {
-            using var srcStream = new MemoryStream(ADiffData.ToArray());
-            using var targetStream = new MemoryStream(BDiffData.ToArray());
-            using var deltaStream = new MemoryStream();
-            using var outputStream = new MemoryStream();
-            VcEncoder coder = new VcEncoder(srcStream, targetStream, deltaStream);
-            VCDiffResult result = coder.Encode(); //encodes with no checksum and not interleaved
-            Assert.Equal(VCDiffResult.SUCCESS, result);
+	[Fact]
+	public void Checksum_Test()
+	{
+		using var srcStream = new MemoryStream(ADiffData.ToArray());
+		using var targetStream = new MemoryStream(BDiffData.ToArray());
+		using var deltaStream = new MemoryStream();
+		using var outputStream = new MemoryStream();
+		var coder = new VcEncoder(srcStream, targetStream, deltaStream);
+		var result = coder.Encode(checksumFormat: ChecksumFormat.SDCH); //encodes with no checksum and not interleaved
+		Assert.Equal(VcDiffResult.SUCCESS, result);
 
-            srcStream.Position = 0;
-            targetStream.Position = 0;
-            deltaStream.Position = 0;
+		srcStream.Position = 0;
+		targetStream.Position = 0;
+		deltaStream.Position = 0;
 
-            VcDecoder decoder = new VcDecoder(srcStream, deltaStream, outputStream);
-            Assert.Equal(VCDiffResult.SUCCESS, decoder.Decode(out long bytesWritten));
+		var decoder = new VcDecoder(srcStream, deltaStream, outputStream);
+		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
 
-            Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
-            Assert.NotEqual(0, bytesWritten);
-        }
+		Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
+	}
 
-        [Fact]
-        public void Checksum_Test()
-        {
-            using var srcStream = new MemoryStream(ADiffData.ToArray());
-            using var targetStream = new MemoryStream(BDiffData.ToArray());
-            using var deltaStream = new MemoryStream();
-            using var outputStream = new MemoryStream();
-            VcEncoder coder = new VcEncoder(srcStream, targetStream, deltaStream);
-            VCDiffResult result = coder.Encode(checksumFormat: ChecksumFormat.SDCH); //encodes with no checksum and not interleaved
-            Assert.Equal(VCDiffResult.SUCCESS, result);
+	[Fact]
+	public void Interleaved_Test()
+	{
+		using var srcStream = new MemoryStream(ADiffData.ToArray());
+		using var targetStream = new MemoryStream(BDiffData.ToArray());
+		using var deltaStream = new MemoryStream();
+		using var outputStream = new MemoryStream();
+		var coder = new VcEncoder(srcStream, targetStream, deltaStream);
+		var result = coder.Encode(true); //encodes with no checksum and not interleaved
+		Assert.Equal(VcDiffResult.SUCCESS, result);
 
-            srcStream.Position = 0;
-            targetStream.Position = 0;
-            deltaStream.Position = 0;
+		srcStream.Position = 0;
+		targetStream.Position = 0;
+		deltaStream.Position = 0;
 
-            VcDecoder decoder = new VcDecoder(srcStream, deltaStream, outputStream);
-            Assert.Equal(VCDiffResult.SUCCESS, decoder.Decode(out long bytesWritten));
+		var decoder = new VcDecoder(srcStream, deltaStream, outputStream);
 
-            Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
-        }
+		long bytesWritten = 0;
 
-        [Fact]
-        public void Interleaved_Test()
-        {
-            using var srcStream = new MemoryStream(ADiffData.ToArray());
-            using var targetStream = new MemoryStream(BDiffData.ToArray());
-            using var deltaStream = new MemoryStream();
-            using var outputStream = new MemoryStream();
-            VcEncoder coder = new VcEncoder(srcStream, targetStream, deltaStream);
-            VCDiffResult result = coder.Encode(interleaved: true); //encodes with no checksum and not interleaved
-            Assert.Equal(VCDiffResult.SUCCESS, result);
+		while (bytesWritten < BDiffData.Length)
+		{
+			Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var chunk));
+			bytesWritten += chunk;
+		}
 
-            srcStream.Position = 0;
-            targetStream.Position = 0;
-            deltaStream.Position = 0;
+		Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
+	}
 
-            VcDecoder decoder = new VcDecoder(srcStream, deltaStream, outputStream);
+	[Fact]
+	public void NoChecksumNoInterleaved_Test()
+	{
+		using var srcStream = new MemoryStream(ADiffData.ToArray());
+		using var targetStream = new MemoryStream(BDiffData.ToArray());
+		using var deltaStream = new MemoryStream();
+		using var outputStream = new MemoryStream();
+		var coder = new VcEncoder(srcStream, targetStream, deltaStream);
+		var result = coder.Encode(); //encodes with no checksum and not interleaved
+		Assert.Equal(VcDiffResult.SUCCESS, result);
 
-            long bytesWritten = 0;
+		srcStream.Position = 0;
+		targetStream.Position = 0;
+		deltaStream.Position = 0;
 
-            while (bytesWritten < BDiffData.Length)
-            {
-                Assert.Equal(VCDiffResult.SUCCESS, decoder.Decode(out long chunk));
-                bytesWritten += chunk;
-            }
-            Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
-        }
-    }
+		var decoder = new VcDecoder(srcStream, deltaStream, outputStream);
+		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
+
+		Assert.Equal("Goodbye World", Encoding.UTF8.GetString(outputStream.ToArray()));
+		Assert.NotEqual(0, bytesWritten);
+	}
 }

@@ -6,7 +6,7 @@
     <members>
         <member name="M:VCDiff.Decoders.BodyDecoder.#ctor(VCDiff.Decoders.WindowDecoder,VCDiff.Shared.IByteBuffer,VCDiff.Shared.IByteBuffer,System.IO.Stream,VCDiff.Decoders.CustomCodeTableDecoder)">
             <summary>
-            The main decoder loop for the data
+                The main decoder loop for the data
             </summary>
             <param name="w">the window decoder</param>
             <param name="source">The source dictionary data</param>
@@ -16,38 +16,38 @@
         </member>
         <member name="M:VCDiff.Decoders.BodyDecoder.DecodeInterleave">
             <summary>
-            Decode if as expecting interleave
+                Decode if as expecting interleave
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.BodyDecoder.DecodeInterleaveAsync(System.Threading.CancellationToken)">
             <summary>
-            Decode if as expecting interleave
+                Decode if as expecting interleave
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.BodyDecoder.Decode">
             <summary>
-            Decode normally
+                Decode normally
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.BodyDecoder.DecodeAsync(System.Threading.CancellationToken)">
             <summary>
-            Decode normally
+                Decode normally
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.InstructionDecoder.#ctor(VCDiff.Shared.ByteBuffer,VCDiff.Decoders.CustomCodeTableDecoder)">
             <summary>
-            Decodes the incoming instruction from the buffer
+                Decodes the incoming instruction from the buffer
             </summary>
             <param name="sin">the instruction buffer</param>
             <param name="customTable">custom code table if any. Default is null.</param>
         </member>
         <member name="M:VCDiff.Decoders.InstructionDecoder.Next(System.Int32@,System.Byte@)">
             <summary>
-            Gets the next instruction from the buffer
+                Gets the next instruction from the buffer
             </summary>
             <param name="size">the size</param>
             <param name="mode">the mode</param>
@@ -55,22 +55,22 @@
         </member>
         <member name="T:VCDiff.Decoders.VcDecoder">
             <summary>
-            A simple VCDIFF decoder class.
+                A simple VCDIFF decoder class.
             </summary>
         </member>
         <member name="P:VCDiff.Decoders.VcDecoder.IsSDCHFormat">
             <summary>
-            If the provided delta is in Shared-Dictionary Compression over HTTP (Sandwich) protocol.
+                If the provided delta is in Shared-Dictionary Compression over HTTP (Sandwich) protocol.
             </summary>
         </member>
         <member name="P:VCDiff.Decoders.VcDecoder.IsInitialized">
             <summary>
-            If the decoder has been initialized.
+                If the decoder has been initialized.
             </summary>
         </member>
         <member name="M:VCDiff.Decoders.VcDecoder.#ctor(System.IO.Stream,System.IO.Stream,System.IO.Stream,System.Int32)">
             <summary>
-            Creates a new VCDIFF decoder.
+                Creates a new VCDIFF decoder.
             </summary>
             <param name="source">The dictionary stream, or the base file.</param>
             <param name="delta">The stream containing the VCDIFF delta.</param>
@@ -79,38 +79,38 @@
         </member>
         <member name="M:VCDiff.Decoders.VcDecoder.Initialize">
             <summary>
-            Call this before calling decode
-            This expects at least the header part of the delta file
-            is available in the stream
+                Call this before calling decode
+                This expects at least the header part of the delta file
+                is available in the stream
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.VcDecoder.Decode(System.Int64@)">
             <summary>
-            Writes the patched file into the output stream.
+                Writes the patched file into the output stream.
             </summary>
             <param name="bytesWritten">Number of bytes written into the output stream.</param>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.VcDecoder.DecodeAsync">
             <summary>
-            Writes the patched file into the output stream asynchronously.
-            This method is only asynchronous for the final step of writing the patched data into the output stream.
-            For large outputs, this may be beneficial.
+                Writes the patched file into the output stream asynchronously.
+                This method is only asynchronous for the final step of writing the patched data into the output stream.
+                For large outputs, this may be beneficial.
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Decoders.VcDecoder.Dispose">
             <summary>
-            Disposes the decoder
+                Disposes the decoder
             </summary>
         </member>
         <member name="F:VCDiff.Decoders.WindowDecoder.DefaultMaxTargetFileSize">
-            The default maximum target file size (and target window size) 
+            The default maximum target file size (and target window size)
         </member>
         <member name="M:VCDiff.Decoders.WindowDecoder.#ctor(System.Int64,VCDiff.Shared.IByteBuffer,System.Int32)">
             <summary>
-            Parses the window from the data
+                Parses the window from the data
             </summary>
             <param name="dictionarySize">the dictionary size</param>
             <param name="buffer">the buffer containing the incoming data</param>
@@ -118,14 +118,14 @@
         </member>
         <member name="M:VCDiff.Decoders.WindowDecoder.Decode(System.Boolean)">
             <summary>
-            Decodes the window header.
+                Decodes the window header.
             </summary>
             <param name="isSdch">If the delta uses SDCH extensions.</param>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Encoders.BlockHash.#ctor(VCDiff.Shared.ByteBuffer,System.Int32,VCDiff.Encoders.RollingHash,System.Int32)">
             <summary>
-            Create a hash lookup table for the data
+                Create a hash lookup table for the data
             </summary>
             <param name="sin">the data to create the table for</param>
             <param name="offset">the offset usually 0</param>
@@ -134,7 +134,7 @@
         </member>
         <member name="M:VCDiff.Encoders.BlockHash.FindBestMatch(System.UInt64,System.Int64,System.Int64,System.Int64,System.Byte*,VCDiff.Shared.ByteBuffer,VCDiff.Encoders.BlockHash.Match@)">
             <summary>
-            Finds the best matching block for the candidate
+                Finds the best matching block for the candidate
             </summary>
             <param name="hash">the hash to look for</param>
             <param name="candidateStart">the start position</param>
@@ -146,7 +146,7 @@
         </member>
         <member name="M:VCDiff.Encoders.ChunkEncoder.#ctor(VCDiff.Encoders.BlockHash,VCDiff.Shared.ByteBuffer,VCDiff.Encoders.RollingHash,VCDiff.Shared.ChecksumFormat,System.Boolean,System.Int32)">
             <summary>
-            Performs the actual encoding of a chunk of data into the VCDiff format
+                Performs the actual encoding of a chunk of data into the VCDiff format
             </summary>
             <param name="dictionary">The dictionary hash table</param>
             <param name="oldData">The data for the dictionary hash table</param>
@@ -154,62 +154,64 @@
             <param name="interleaved">Whether to interleave the data or not</param>
             <param name="checksumFormat">The format of the checksums for each window.</param>
             <param name="minBlockSize">The minimum block size to use. Defaults to 32, and must be a power of 2.
-                This value must also be smaller than the block size of the dictionary.</param>
+                This value must also be smaller than the block size of the dictionary.
+            </param>
         </member>
         <member name="M:VCDiff.Encoders.ChunkEncoder.EncodeChunk(VCDiff.Shared.ByteBuffer,System.IO.Stream)">
             <summary>
-            Encodes the data using the settings from initialization
+                Encodes the data using the settings from initialization
             </summary>
             <param name="newData">the target data</param>
             <param name="outputStream">the out stream</param>
         </member>
         <member name="M:VCDiff.Encoders.InstructionMap.#ctor">
             <summary>
-            Instruction mapping for op codes and such for using in encoding
+                Instruction mapping for op codes and such for using in encoding
             </summary>
         </member>
         <member name="T:VCDiff.Encoders.RollingHash">
             <summary>
-            A rolling hasher for <see cref="T:VCDiff.Encoders.VcEncoder"/>.
-            <see cref="T:VCDiff.Encoders.RollingHash"/> may be reused 
+                A rolling hasher for<see cref="T:VCDiff.Encoders.VcEncoder"/>.
+                <see cref="T:VCDiff.Encoders.RollingHash"/>
+                may be reused
             </summary>
         </member>
         <member name="M:VCDiff.Encoders.RollingHash.#ctor(System.Int32)">
             <summary>
-            Manually creates a rolling hash instance for use with a <see cref="T:VCDiff.Encoders.VcEncoder"/>.
-            This object must be disposed because it allocates pinned memory that will never be garbage collected
-            if it is not disposed.
+                Manually creates a rolling hash instance for use with a<see cref="T:VCDiff.Encoders.VcEncoder"/>.
+                This object must be disposed because it allocates pinned memory that will never be garbage collected
+                if it is not disposed.
             </summary>
             <param name="size">The window size to use for this hashing instance.</param>
         </member>
         <member name="P:VCDiff.Encoders.RollingHash.WindowSize">
             <summary>
-            The window size for this rolling hash.
+                The window size for this rolling hash.
             </summary>
         </member>
         <member name="M:VCDiff.Encoders.RollingHash.Hash(System.Byte*,System.Int32)">
             <summary>
-            Generate a new hash from the bytes
-            
-            The formula for calculating h is
-            h(0) = 1
-            h(n) = SUM {i=0}^{n-1} c^{n - i - 1} S[i]
-            
-            where n is the length of S, and c is kMult.
-            
-            In code,
-            h(n) = Sum(i: 0, n: len - 1, i => kMult ** (len - i - 1) span[i])
-            
-            The final result is then MODded using binary and with kBase.
-            
+                Generate a new hash from the bytes
+
+                The formula for calculating h is
+                h(0) = 1
+                h(n) = SUM {i=0}^{n-1} c^{n - i - 1} S[i]
+
+                where n is the length of S, and c is kMult.
+
+                In code,
+                h(n) = Sum(i: 0, n: len - 1, i => kMult ** (len - i - 1) span[i])
+
+                The final result is then MODded using binary and with kBase.
+
             </summary>
         </member>
         <member name="M:VCDiff.Encoders.RollingHash.UpdateHash(System.UInt64,System.Byte,System.Byte)">
             <summary>
-            Rolling update for the hash
-            First byte must be the first bytee that was used in the data
-            that was last encoded
-            new byte is the first byte position + Size
+                Rolling update for the hash
+                First byte must be the first bytee that was used in the data
+                that was last encoded
+                new byte is the first byte position + Size
             </summary>
             <param name="oldHash">the original hash</param>
             <param name="firstByte">the original byte of the data for the first hash</param>
@@ -217,140 +219,176 @@
             <returns></returns>
         </member>
         <member name="M:VCDiff.Encoders.RollingHash.Dispose">
-             <summary>
-             Dispose the rolling hash instance.
-            
-             You must always dispose a manually created hashing instance, or memory leaks will occur.
-             For performance purposes, 
-             </summary>
+            <summary>
+                Dispose the rolling hash instance.
+
+                You must always dispose a manually created hashing instance, or memory leaks will occur.
+                For performance purposes,
+            </summary>
         </member>
         <member name="T:VCDiff.Encoders.VcEncoder">
             <summary>
-            A simple VCDIFF Encoder class.
+                A simple VCDIFF Encoder class.
             </summary>
         </member>
         <member name="M:VCDiff.Encoders.VcEncoder.#ctor(System.IO.Stream,System.IO.Stream,System.IO.Stream,System.Int32,System.Int32,System.Int32,VCDiff.Encoders.RollingHash)">
-             <summary>
-             Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
-             </summary>
-             <param name="source">The dictionary (sourceStream file).</param>
-             <param name="target">The target to create the diff from.</param>
-             <param name="outputStream">The stream to write the diff into.</param>
-             <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
-             <param name="blockSize">
-             The block size to use. Must be a power of two. No match smaller than this block size will be identified.
-             Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table, and will halve the setup time
-             for a new BlockHash.  However, it also doubles the minimum match length that is guaranteed to be found.
-             
-             Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2 accelerated, if supported. 16 is a good default
-             for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize for speed.
-             </param>
-             <param name="chunkSize">
-             The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the block size.</param>
-             <param name="rollingHash">
-             Manually provide a <see cref="T:VCDiff.Encoders.RollingHash"/> instance that can be reused for multiple encoding instances
-             of the same block size.
-            
-             If you provide a <see cref="T:VCDiff.Encoders.RollingHash"/> instance, you must dispose of it yourself.
-             </param>
-             <exception cref="T:System.ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
+            <summary>
+                Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
+            </summary>
+            <param name="source">The dictionary (sourceStream file).</param>
+            <param name="target">The target to create the diff from.</param>
+            <param name="outputStream">The stream to write the diff into.</param>
+            <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
+            <param name="blockSize">
+                The block size to use. Must be a power of two. No match smaller than this block size will be identified.
+                Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table,
+                and will halve the setup time
+                for a new BlockHash. However, it also doubles the minimum match length that is guaranteed to be found.
+
+                Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2
+                accelerated, if supported. 16 is a good default
+                for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize
+                for speed.
+            </param>
+            <param name="chunkSize">
+                The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the
+                block size.
+            </param>
+            <param name="rollingHash">
+                Manually provide a
+                <see cref="T:VCDiff.Encoders.RollingHash"/>
+                instance that can be reused for multiple encoding instances
+                of the same block size.
+
+                If you provide a
+                <see cref="T:VCDiff.Encoders.RollingHash"/>
+                instance, you must dispose of it yourself.
+            </param>
+            <exception cref="T:System.ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
         </member>
         <member name="M:VCDiff.Encoders.VcEncoder.#ctor(VCDiff.Shared.ByteBuffer,System.IO.Stream,System.IO.Stream,System.Int32,System.Int32,System.Int32,VCDiff.Encoders.RollingHash)">
-             <summary>
-             Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
-             </summary>
-             <param name="buffer">The dictionary (source file).</param>
-             <param name="target">The target to create the diff from.</param>
-             <param name="outputStream">The stream to write the diff into.</param>
-             <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
-             <param name="blockSize">
-             The block size to use. Must be a power of two. No match smaller than this block size will be identified.
-             Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table, and will halve the setup time
-             for a new BlockHash.  However, it also doubles the minimum match length that is guaranteed to be found.
-             
-             Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2 accelerated, if supported. 16 is a good default
-             for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize for speed.
-             </param>
-             <param name="chunkSize">
-             The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the block size.</param>
-             <param name="rollingHash">
-             Manually provide a <see cref="T:VCDiff.Encoders.RollingHash"/> instance that can be reused for multiple encoding instances
-             of the same block size.
-            
-             If you provide a <see cref="T:VCDiff.Encoders.RollingHash"/> instance, you must dispose of it yourself.
-             </param>
-             <exception cref="T:System.ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
+            <summary>
+                Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
+            </summary>
+            <param name="buffer">The dictionary (source file).</param>
+            <param name="target">The target to create the diff from.</param>
+            <param name="outputStream">The stream to write the diff into.</param>
+            <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
+            <param name="blockSize">
+                The block size to use. Must be a power of two. No match smaller than this block size will be identified.
+                Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table,
+                and will halve the setup time
+                for a new BlockHash. However, it also doubles the minimum match length that is guaranteed to be found.
+
+                Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2
+                accelerated, if supported. 16 is a good default
+                for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize
+                for speed.
+            </param>
+            <param name="chunkSize">
+                The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the
+                block size.
+            </param>
+            <param name="rollingHash">
+                Manually provide a
+                <see cref="T:VCDiff.Encoders.RollingHash"/>
+                instance that can be reused for multiple encoding instances
+                of the same block size.
+
+                If you provide a
+                <see cref="T:VCDiff.Encoders.RollingHash"/>
+                instance, you must dispose of it yourself.
+            </param>
+            <exception cref="T:System.ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
         </member>
         <member name="M:VCDiff.Encoders.VcEncoder.Encode(System.Boolean,VCDiff.Shared.ChecksumFormat,System.IProgress{System.Single})">
             <summary>
-            Calculate and write a diff for the file.
+                Calculate and write a diff for the file.
             </summary>
             <param name="interleaved">Whether to output in SDCH interleaved diff format.</param>
             <param name="checksumFormat">
-            Whether to include Adler32 checksums for encoded data windows. If interleaved is true, <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
-            is not supported.
+                Whether to include Adler32 checksums for encoded data windows. If interleaved is true,
+                <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
+                is not supported.
             </param>
             <param name="progress">Reports an estimate of the encoding progress. Value if 0 to 1.</param>
             <returns>
-            <see cref="F:VCDiff.Includes.VCDiffResult.SUCCESS"/> if successful, <see cref="F:VCDiff.Includes.VCDiffResult.ERROR"/> if the sourceStream or target are zero-length.</returns>
-            <exception cref="T:System.ArgumentException">If interleaved is true, and <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/> is chosen.</exception>
+                <see cref="F:VCDiff.Includes.VCDiffResult.SUCCESS"/>
+                if successful,
+                <see cref="F:VCDiff.Includes.VCDiffResult.ERROR"/>
+                if the sourceStream or target are zero-length.
+            </returns>
+            <exception cref="T:System.ArgumentException">If interleaved is true, and
+                <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
+                is chosen.
+            </exception>
         </member>
         <member name="M:VCDiff.Encoders.VcEncoder.EncodeAsync(System.Boolean,VCDiff.Shared.ChecksumFormat,System.IProgress{System.Single})">
             <summary>
-            Calculate and write a diff for the file.
-            This method isn't fully asynchonous; writes to the output stream are still synchronous.
-            
-            It is recommended you use the synchronous <see cref="M:VCDiff.Encoders.VcEncoder.Encode(System.Boolean,VCDiff.Shared.ChecksumFormat,System.IProgress{System.Single})"/> method for most use cases.
+                Calculate and write a diff for the file.
+                This method isn't fully asynchonous; writes to the output stream are still synchronous.
+
+                It is recommended you use the synchronous
+                <see cref="M:VCDiff.Encoders.VcEncoder.Encode(System.Boolean,VCDiff.Shared.ChecksumFormat,System.IProgress{System.Single})"/>
+                method for most use cases.
             </summary>
             <param name="interleaved">Whether to output in SDCH interleaved diff format.</param>
             <param name="checksumFormat">
-            Whether to include Adler32 checksums for encoded data windows. If interleaved is true, <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
-            is not supported.
+                Whether to include Adler32 checksums for encoded data windows. If interleaved is true,
+                <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
+                is not supported.
             </param>
             <param name="progress">Reports an estimate of the encoding progress. Value if 0 to 1.</param>
             <returns>
-            <see cref="F:VCDiff.Includes.VCDiffResult.SUCCESS"/> if successful, <see cref="F:VCDiff.Includes.VCDiffResult.ERROR"/> if the sourceStream or target are zero-length.</returns>
-            <exception cref="T:System.ArgumentException">If interleaved is true, and <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/> is chosen.</exception>
+                <see cref="F:VCDiff.Includes.VCDiffResult.SUCCESS"/>
+                if successful,
+                <see cref="F:VCDiff.Includes.VCDiffResult.ERROR"/>
+                if the sourceStream or target are zero-length.
+            </returns>
+            <exception cref="T:System.ArgumentException">If interleaved is true, and
+                <see cref="F:VCDiff.Shared.ChecksumFormat.Xdelta3"/>
+                is chosen.
+            </exception>
         </member>
         <member name="M:VCDiff.Encoders.VcEncoder.Dispose">
             <summary>
-            Disposes the encoder.
+                Disposes the encoder.
             </summary>
         </member>
         <member name="T:VCDiff.Includes.VCDiffResult">
             <summary>
-            The result of a VCDIFF Operation.
+                The result of a VCDIFF Operation.
             </summary>
         </member>
         <member name="F:VCDiff.Includes.VCDiffResult.SUCCESS">
             <summary>
-            The diff operation was successful.
+                The diff operation was successful.
             </summary>
         </member>
         <member name="F:VCDiff.Includes.VCDiffResult.ERROR">
             <summary>
-            An error occurred during the diff operation.
+                An error occurred during the diff operation.
             </summary>
         </member>
         <member name="F:VCDiff.Includes.VCDiffResult.EOD">
             <summary>
-            End of stream encountered.
+                End of stream encountered.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.AddressCache.DefaultNearCacheSize">
             <summary>
-            The address cache implementation as described in the RFC doc.
+                The address cache implementation as described in the RFC doc.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.Adler32.BASE">
             <summary>
-            Zlib implementation of the Adler32 Hash
+                Zlib implementation of the Adler32 Hash
             </summary>
         </member>
         <member name="M:VCDiff.Shared.Adler32.HashSsse3(System.UInt32,System.ReadOnlySpan{System.Byte})">
             <summary>
-            SSSE3 Version of Adler32
-            https://chromium.googlesource.com/chromium/src/third_party/zlib/+/master/adler32_simd.c
+                SSSE3 Version of Adler32
+                https://chromium.googlesource.com/chromium/src/third_party/zlib/+/master/adler32_simd.c
             </summary>
             <param name="adler"></param>
             <param name="buff"></param>
@@ -358,7 +396,7 @@
         </member>
         <member name="T:VCDiff.Shared.ByteBuffer">
             <summary>
-            Encapsulates a buffer that reads bytes from managed or unmanaged memory.
+                Encapsulates a buffer that reads bytes from managed or unmanaged memory.
             </summary>
         </member>
         <member name="M:VCDiff.Shared.ByteBuffer.#ctor(System.Byte[])">
@@ -375,45 +413,45 @@
         </member>
         <member name="M:VCDiff.Shared.ByteBuffer.DangerousGetBytePointer">
             <summary>
-            Dangerously gets the byte pointer.
+                Dangerously gets the byte pointer.
             </summary>
             <returns></returns>
         </member>
         <member name="M:VCDiff.Shared.ByteBuffer.DangerousGetBytePointerAtCurrentPositionAndIncreaseOffsetAfter(System.Int32)">
             <summary>
-            Dangerously retrieves the byte pointer at the current position and then increases the offset after.
+                Dangerously retrieves the byte pointer at the current position and then increases the offset after.
             </summary>
             <param name="read"></param>
             <returns></returns>
         </member>
         <member name="T:VCDiff.Shared.ChecksumFormat">
             <summary>
-            Which checksum format to output.
+                Which checksum format to output.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.ChecksumFormat.None">
             <summary>
-            Do not emit a checksum.
+                Do not emit a checksum.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.ChecksumFormat.SDCH">
             <summary>
-            Emit a Google compatible SDCH checksum.
+                Emit a Google compatible SDCH checksum.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.ChecksumFormat.Xdelta3">
             <summary>
-            Emit an Xdelta3 checksum.
+                Emit an Xdelta3 checksum.
             </summary>
         </member>
         <member name="F:VCDiff.Shared.CodeTable.kNoOpcode">
             <summary>
-            Default CodeTable as described in the RFC doc
+                Default CodeTable as described in the RFC doc
             </summary>
         </member>
         <member name="F:VCDiff.Shared.VarIntBE.int32Max">
             <summary>
-            Special VarIntBE class for encoding a Variable BE Integer
+                Special VarIntBE class for encoding a Variable BE Integer
             </summary>
         </member>
     </members>

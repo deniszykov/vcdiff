@@ -3,89 +3,84 @@
 
 using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using VCDiff.Compression;
 using VCDiff.Compression.Xz;
 using VCDiff.Shared;
 
-namespace VCDiff.Compressors
+namespace VCDiff.Compressors;
+
+internal class XzCompressor : ICompressor, IDisposable
 {
-    internal class XzCompressor : ICompressor, IDisposable
-    {
-        private readonly ArrayPool<byte> _bytePool;
+	private readonly ArrayPool<byte> _bytePool;
+	private readonly MemoryStream addressesCompressedBuffer;
+	private readonly XzStream addressesDecompressor;
 
-        public XzCompressor(ArrayPool<byte>? bytePool = null)
-        {
-            _bytePool = bytePool ?? ArrayPool<byte>.Shared;
+	private readonly MemoryStream addRunCompressedBuffer;
+	private readonly XzStream addRunDecompressor;
+	private readonly MemoryStream instructionsCompressedBuffer;
+	private readonly XzStream instructionsDecompressor;
 
-            addRunCompressedBuffer = new();
-            instructionsCompressedBuffer = new();
-            addressesCompressedBuffer = new();
+	public XzCompressor(ArrayPool<byte>? bytePool = null)
+	{
+		this._bytePool = bytePool ?? ArrayPool<byte>.Shared;
 
-            addRunDecompressor = new(addRunCompressedBuffer, _bytePool);
-            instructionsDecompressor = new(instructionsCompressedBuffer, _bytePool);
-            addressesDecompressor = new(addressesCompressedBuffer, _bytePool);
-        }
+		this.addRunCompressedBuffer = new MemoryStream();
+		this.instructionsCompressedBuffer = new MemoryStream();
+		this.addressesCompressedBuffer = new MemoryStream();
 
-        private readonly MemoryStream addRunCompressedBuffer;
-        private readonly MemoryStream instructionsCompressedBuffer;
-        private readonly MemoryStream addressesCompressedBuffer;
-        private readonly XZStream addRunDecompressor;
-        private readonly XZStream instructionsDecompressor;
-        private readonly XZStream addressesDecompressor;
+		this.addRunDecompressor = new XzStream(this.addRunCompressedBuffer, this._bytePool);
+		this.instructionsDecompressor = new XzStream(this.instructionsCompressedBuffer, this._bytePool);
+		this.addressesDecompressor = new XzStream(this.addressesCompressedBuffer, this._bytePool);
+	}
 
-        public PinnedArrayRental Decompress(WindowSectionType windowSectionType, PinnedArrayRental sectionData)
-        {
-            if (sectionData.Data == null)
-            {
-                throw new ArgumentException("Cannot decompress null data");
-            }
+	public PinnedArrayRental Decompress(WindowSectionType windowSectionType, PinnedArrayRental sectionData)
+	{
+		if (sectionData.Data == null) throw new ArgumentException("Cannot decompress null data");
 
-            MemoryStream memoryStream;
-            XZStream xzStream;
-            switch (windowSectionType)
-            {
-                case WindowSectionType.AddRunData:
-                    memoryStream = addRunCompressedBuffer;
-                    xzStream = addRunDecompressor;
-                    break;
-                case WindowSectionType.InstructionsAndSizes:
-                    memoryStream = instructionsCompressedBuffer;
-                    xzStream = instructionsDecompressor;
-                    break;
-                case WindowSectionType.AddressForCopy:
-                    memoryStream = addressesCompressedBuffer;
-                    xzStream = addressesDecompressor;
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(windowSectionType));
-            }
+		MemoryStream memoryStream;
+		XzStream xzStream;
+		// ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
+		switch (windowSectionType)
+		{
+			case WindowSectionType.AddRunData:
+				memoryStream = this.addRunCompressedBuffer;
+				xzStream = this.addRunDecompressor;
+				break;
+			case WindowSectionType.InstructionsAndSizes:
+				memoryStream = this.instructionsCompressedBuffer;
+				xzStream = this.instructionsDecompressor;
+				break;
+			case WindowSectionType.AddressForCopy:
+				memoryStream = this.addressesCompressedBuffer;
+				xzStream = this.addressesDecompressor;
+				break;
+			default:
+				throw new ArgumentOutOfRangeException(nameof(windowSectionType));
+		}
 
-            var uncompressedLength = VarIntBE.ParseInt32(sectionData.AsSpan(), out int uncompressedLengthByteCount);
-            var compressedData = sectionData.AsSpan().Slice(uncompressedLengthByteCount);
+		var uncompressedLength = VarIntBe.ParseInt32(sectionData.AsSpan(), out var uncompressedLengthByteCount);
+		var compressedData = sectionData.AsSpan().Slice(uncompressedLengthByteCount);
 
-            // Each section in a window uses the same compression stream throughout the file
-            // If this is not the first window, reuse the same stream from before, just using different data
-            memoryStream.SetLength(compressedData.Length);
-            memoryStream.Position = 0;
-            memoryStream.Write(compressedData);
-            memoryStream.Position = 0;
+		// Each section in a window uses the same compression stream throughout the file
+		// If this is not the first window, reuse the same stream from before, just using different data
+		memoryStream.SetLength(compressedData.Length);
+		memoryStream.Position = 0;
+		memoryStream.Write(compressedData);
+		memoryStream.Position = 0;
 
-            var decompressedData = new PinnedArrayRental(uncompressedLength, _bytePool);
-            xzStream.ReadExactly(decompressedData.AsSpan());
+		var decompressedData = new PinnedArrayRental(uncompressedLength, this._bytePool);
+		xzStream.ReadExactly(decompressedData.AsSpan());
 
-            return decompressedData;
-        }
-        public void Dispose()
-        {
-            addressesCompressedBuffer?.Dispose();
-            instructionsCompressedBuffer?.Dispose();
-            addressesCompressedBuffer?.Dispose();
-            addRunDecompressor?.Dispose();
-            instructionsDecompressor?.Dispose();
-            addressesDecompressor?.Dispose();
-        }
-    }
+		return decompressedData;
+	}
+	public void Dispose()
+	{
+		this.addressesCompressedBuffer.Dispose();
+		this.instructionsCompressedBuffer.Dispose();
+		this.addressesCompressedBuffer.Dispose();
+		this.addRunDecompressor.Dispose();
+		this.instructionsDecompressor.Dispose();
+		this.addressesDecompressor.Dispose();
+	}
 }

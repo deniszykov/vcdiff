@@ -1,138 +1,128 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-#nullable disable
-
 using System;
 using System.Buffers;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
 
 namespace VCDiff.Compression.Xz;
 
-public sealed partial class XZStream : XZReadOnlyStream
+public sealed class XzStream : XzReadOnlyStream
 {
-    private readonly ArrayPool<byte>? _bytePool;
+	private readonly ArrayPool<byte>? _bytePool;
+	private XzBlock? _currentBlock;
 
-    public XZStream(Stream baseStream, ArrayPool<byte>? bytePool = null)
-        : base(baseStream)
-    {
-        _bytePool = bytePool;
-    }
+	private bool _endOfStream;
 
-    protected override void Dispose(bool disposing)
-    {
-        base.Dispose(disposing);
-    }
+	public XzHeader? Header { get; private set; }
+	public XzIndex? Index { get; private set; }
+	public XzFooter? Footer { get; private set; }
+	public bool HeaderIsRead { get; private set; }
 
-    public static bool IsXZStream(Stream stream)
-    {
-        try
-        {
-            return null != XZHeader.FromStream(stream);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
+	public XzStream(Stream baseStream, ArrayPool<byte>? bytePool = null)
+		: base(baseStream)
+	{
+		this._bytePool = bytePool;
+	}
 
-    private void AssertBlockCheckTypeIsSupported()
-    {
-        switch (Header.BlockCheckType)
-        {
-            case CheckType.NONE:
-            case CheckType.CRC32:
-            case CheckType.CRC64:
-            case CheckType.SHA256:
-                break;
-            default:
-                throw new InvalidFormatException("Check Type unknown to this version of decoder.");
-        }
-    }
+	protected override void Dispose(bool disposing)
+	{
+		base.Dispose(disposing);
+	}
 
-    public XZHeader Header { get; private set; }
-    public XZIndex Index { get; private set; }
-    public XZFooter Footer { get; private set; }
-    public bool HeaderIsRead { get; private set; }
-    private XZBlock _currentBlock;
+	public static bool IsXzStream(Stream stream)
+	{
+		try
+		{
+			return null != XzHeader.FromStream(stream);
+		}
+		catch (Exception)
+		{
+			return false;
+		}
+	}
 
-    private bool _endOfStream;
+	private void AssertBlockCheckTypeIsSupported()
+	{
+		switch (this.Header!.BlockCheckType)
+		{
+			case CheckType.NONE:
+			case CheckType.CRC32:
+			case CheckType.CRC64:
+			case CheckType.SHA256:
+				break;
+			default:
+				throw new InvalidFormatException("Check Type unknown to this version of decoder.");
+		}
+	}
 
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        var bytesRead = 0;
-        if (_endOfStream)
-        {
-            return bytesRead;
-        }
+	public override int Read(byte[] buffer, int offset, int count)
+	{
+		var bytesRead = 0;
+		if (this._endOfStream) return bytesRead;
 
-        if (!HeaderIsRead)
-        {
-            ReadHeader();
-        }
+		if (!this.HeaderIsRead) this.ReadHeader();
 
-        bytesRead = ReadBlocks(buffer, offset, count);
-        if (bytesRead < count)
-        {
-            _endOfStream = true;
-            ReadIndex();
-            ReadFooter();
-        }
-        return bytesRead;
-    }
+		bytesRead = this.ReadBlocks(buffer, offset, count);
+		if (bytesRead < count)
+		{
+			this._endOfStream = true;
+			this.ReadIndex();
+			this.ReadFooter();
+		}
 
-    private void ReadHeader()
-    {
-        Header = XZHeader.FromStream(BaseStream);
-        AssertBlockCheckTypeIsSupported();
-        HeaderIsRead = true;
-    }
+		return bytesRead;
+	}
 
-    private void ReadIndex() => Index = XZIndex.FromStream(BaseStream, true);
+	private void ReadHeader()
+	{
+		this.Header = XzHeader.FromStream(this.BaseStream);
+		this.AssertBlockCheckTypeIsSupported();
+		this.HeaderIsRead = true;
+	}
 
-    // TODO verify Index
-    private void ReadFooter() => Footer = XZFooter.FromStream(BaseStream);
+	private void ReadIndex()
+	{
+		this.Index = XzIndex.FromStream(this.BaseStream, true);
+	}
 
-    // TODO verify footer
+	// TODO verify Index
+	private void ReadFooter()
+	{
+		this.Footer = XzFooter.FromStream(this.BaseStream);
+	}
 
-    private int ReadBlocks(byte[] buffer, int offset, int count)
-    {
-        var bytesRead = 0;
-        if (_currentBlock is null)
-        {
-            NextBlock();
-        }
+	// TODO verify footer
 
-        for (; ; )
-        {
-            try
-            {
-                if (bytesRead >= count)
-                {
-                    break;
-                }
+	private int ReadBlocks(byte[] buffer, int offset, int count)
+	{
+		var bytesRead = 0;
+		if (this._currentBlock is null) this.NextBlock();
 
-                var remaining = count - bytesRead;
-                var newOffset = offset + bytesRead;
-                var justRead = _currentBlock.Read(buffer, newOffset, remaining);
-                if (justRead < remaining)
-                {
-                    NextBlock();
-                }
+		for (;;)
+		{
+			try
+			{
+				if (bytesRead >= count) break;
 
-                bytesRead += justRead;
-            }
-            catch (XZIndexMarkerReachedException)
-            {
-                break;
-            }
-        }
-        return bytesRead;
-    }
+				var remaining = count - bytesRead;
+				var newOffset = offset + bytesRead;
+				var justRead = this._currentBlock!.Read(buffer, newOffset, remaining);
+				if (justRead < remaining) this.NextBlock();
 
-    private void NextBlock() =>
-        _currentBlock = new XZBlock(BaseStream, Header.BlockCheckType, Header.BlockCheckSize, _bytePool);
+				bytesRead += justRead;
+			}
+			catch (XzIndexMarkerReachedException)
+			{
+				break;
+			}
+		}
+
+		return bytesRead;
+	}
+
+	private void NextBlock()
+	{
+		this._currentBlock = new XzBlock(this.BaseStream, this.Header!.BlockCheckType, this.Header!.BlockCheckSize, this._bytePool);
+	}
 }

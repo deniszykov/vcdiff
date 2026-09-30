@@ -5,71 +5,64 @@ using VCDiff.Encoders;
 using VCDiff.Includes;
 using Xunit;
 
-namespace VCDiff.Tests
+namespace VCDiff.Tests;
+
+public class MattiIntegrationTests
 {
-    public class MattiIntegrationTests
-    {
+	private static readonly Random Random = new(DateTime.Now.GetHashCode());
 
-        [Fact]
-        public void TestEncodeAndDecodeShouldBeTheSame()
-        {
-            int size = 20 * 1024 * 1024; // 20 MB
+	private byte[] CreateRandomByteArray(int size)
+	{
+		var buffer = new byte[size];
 
-            byte[] oldData = CreateRandomByteArray(size);
-            byte[] newData = new byte[size];
+		Random.NextBytes(buffer);
 
-            oldData.CopyTo(newData, 0);
+		return buffer;
+	}
 
-            AddRandomPiecesIn(oldData);
+	private void AddRandomPiecesIn(byte[] input)
+	{
+		var size = 1024 * 100; // 100 KB
 
-            var sOld = new MemoryStream(oldData);
-            var sNew = new MemoryStream(newData);
-            var sDelta = new MemoryStream(new byte[size], true);
+		for (var i = 0; i < 100; i++)
+		{
+			var difference = this.CreateRandomByteArray(size);
 
-            var coder = new VcEncoder(sOld, sNew, sDelta);
-            Assert.Equal(VCDiffResult.SUCCESS, coder.Encode());
+			var index = Random.Next(0, input.Length - size - 1);
 
-            sDelta.SetLength(sDelta.Position);
-            sDelta.Position = 0;
-            sOld.Position = 0;
-            sNew.Position = 0;
+			for (var x = 0; x < size; x++) input[x + index] = difference[x];
+		}
+	}
 
-            var sPatched = new MemoryStream(new byte[size], true);
+	[Fact]
+	public void TestEncodeAndDecodeShouldBeTheSame()
+	{
+		var size = 20 * 1024 * 1024; // 20 MB
 
-            var decoder = new VcDecoder(sOld, sDelta, sPatched);
-            Assert.Equal(VCDiffResult.SUCCESS, decoder.Decode(out long bytesWritten));
+		var oldData = this.CreateRandomByteArray(size);
+		var newData = new byte[size];
 
+		oldData.CopyTo(newData, 0);
 
-            Assert.Equal(sNew.ToArray(), sPatched.ToArray());
-        }
+		this.AddRandomPiecesIn(oldData);
 
-        private static readonly Random random = new Random(DateTime.Now.GetHashCode());
+		var sOld = new MemoryStream(oldData);
+		var sNew = new MemoryStream(newData);
+		var sDelta = new MemoryStream(new byte[size], true);
 
-        private byte[] CreateRandomByteArray(int size)
-        {
-            byte[] buffer = new byte[size];
+		var coder = new VcEncoder(sOld, sNew, sDelta);
+		Assert.Equal(VcDiffResult.SUCCESS, coder.Encode());
 
-            random.NextBytes(buffer);
+		sDelta.SetLength(sDelta.Position);
+		sDelta.Position = 0;
+		sOld.Position = 0;
+		sNew.Position = 0;
 
-            return buffer;
-        }
+		var sPatched = new MemoryStream(new byte[size], true);
 
-        private void AddRandomPiecesIn(byte[] input)
-        {
-            int size = 1024 * 100; // 100 KB
+		var decoder = new VcDecoder(sOld, sDelta, sPatched);
+		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
 
-            for (int i = 0; i < 100; i++)
-            {
-                byte[] difference = CreateRandomByteArray(size);
-
-                int index = random.Next(0, input.Length - size - 1);
-
-                for (int x = 0; x < size; x++)
-                {
-                    input[x + index] = difference[x];
-                }
-            }
-        }
-
-    }
+		Assert.Equal(sNew.ToArray(), sPatched.ToArray());
+	}
 }

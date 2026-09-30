@@ -1,8 +1,6 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-#nullable disable
-
 using System;
 using System.Buffers;
 using System.IO;
@@ -10,267 +8,284 @@ using System.Runtime.CompilerServices;
 
 namespace VCDiff.Compression.LZMA.RangeCoder;
 
-internal partial class Encoder
+internal class Encoder
 {
-    public const uint K_TOP_VALUE = (1 << 24);
+	public const uint K_TOP_VALUE = 1 << 24;
+	private byte _cache;
+	private uint _cacheSize;
 
-    private Stream _stream;
+	public ulong Low;
+	public uint Range;
 
-    public ulong _low;
-    public uint _range;
-    private uint _cacheSize;
-    private byte _cache;
+	private Stream _stream = null!;
 
-    public void SetStream(Stream stream) => _stream = stream;
+	public void SetStream(Stream stream)
+	{
+		this._stream = stream;
+	}
 
-    public void ReleaseStream() => _stream = null;
+	public void ReleaseStream()
+	{
+		this._stream = null!;
+	}
 
-    public void Init()
-    {
-        _low = 0;
-        _range = 0xFFFFFFFF;
-        _cacheSize = 1;
-        _cache = 0;
-    }
+	public void Init()
+	{
+		this.Low = 0;
+		this.Range = 0xFFFFFFFF;
+		this._cacheSize = 1;
+		this._cache = 0;
+	}
 
-    public void FlushData()
-    {
-        for (var i = 0; i < 5; i++)
-        {
-            ShiftLow();
-        }
-    }
+	public void FlushData()
+	{
+		for (var i = 0; i < 5; i++) this.ShiftLow();
+	}
 
-    public void FlushStream() => _stream.Flush();
+	public void FlushStream()
+	{
+		this._stream.Flush();
+	}
 
-    public void CloseStream() => _stream.Dispose();
+	public void CloseStream()
+	{
+		this._stream.Dispose();
+	}
 
-    public void ShiftLow()
-    {
-        if ((uint)_low < 0xFF000000 || (uint)(_low >> 32) == 1)
-        {
-            var temp = _cache;
-            do
-            {
-                _stream.WriteByte((byte)(temp + (_low >> 32)));
-                temp = 0xFF;
-            } while (--_cacheSize != 0);
-            _cache = (byte)(((uint)_low) >> 24);
-        }
-        _cacheSize++;
-        _low = ((uint)_low) << 8;
-    }
+	public void ShiftLow()
+	{
+		if ((uint)this.Low < 0xFF000000 || (uint)(this.Low >> 32) == 1)
+		{
+			var temp = this._cache;
+			do
+			{
+				this._stream.WriteByte((byte)(temp + (this.Low >> 32)));
+				temp = 0xFF;
+			} while (--this._cacheSize != 0);
 
-    public void EncodeDirectBits(uint v, int numTotalBits)
-    {
-        for (var i = numTotalBits - 1; i >= 0; i--)
-        {
-            _range >>= 1;
-            if (((v >> i) & 1) == 1)
-            {
-                _low += _range;
-            }
-            if (_range < K_TOP_VALUE)
-            {
-                _range <<= 8;
-                ShiftLow();
-            }
-        }
-    }
+			this._cache = (byte)((uint)this.Low >> 24);
+		}
 
-    public long GetProcessedSizeAdd() => -1;
+		this._cacheSize++;
+		this.Low = (uint)this.Low << 8;
+	}
+
+	public void EncodeDirectBits(uint v, int numTotalBits)
+	{
+		for (var i = numTotalBits - 1; i >= 0; i--)
+		{
+			this.Range >>= 1;
+			if (((v >> i) & 1) == 1) this.Low += this.Range;
+			if (this.Range < K_TOP_VALUE)
+			{
+				this.Range <<= 8;
+				this.ShiftLow();
+			}
+		}
+	}
+
+	public long GetProcessedSizeAdd()
+	{
+		return -1;
+	}
 }
 
-internal partial class Decoder
+internal class Decoder
 {
-    private readonly ArrayPool<byte> _bytePool;
+	// Buffered input used by the unsafe fast LZMA decode path (see LzmaDecoder.Fast.cs). Avoids
+	// issuing a virtual Stream.ReadByte() call per consumed byte, which otherwise dominates
+	// decode time.
+	private const int FAST_BUFFER_SIZE = 1 << 16;
 
-    public const uint K_TOP_VALUE = (1 << 24);
-    public uint _range;
-    public uint _code;
+	public const uint K_TOP_VALUE = 1 << 24;
+	private readonly ArrayPool<byte> _bytePool;
+	public uint Code;
+	private byte[] _fastBuffer = null!;
 
-    public Stream _stream;
-    public long _total;
+	private bool _fastBufferSafeUnbounded;
+	private bool _fastEndOfStream;
 
-    public Decoder(ArrayPool<byte>? bytePool = null)
-    {
-        _bytePool = bytePool ?? ArrayPool<byte>.Shared;
-    }
+	// Upper bound (in terms of _total) that the fast buffered reader is allowed to physically
+	// read up to. -1 means unbounded. For LZMA2 chunks this must bound reads to the current
+	// chunk's compressed size, or the next chunk header would desynchronize.
+	private long _fastLimit = -1;
+	public uint Range;
 
-    // Upper bound (in terms of _total) that the fast buffered reader is allowed to physically
-    // read up to. -1 means unbounded. For LZMA2 chunks this must bound reads to the current
-    // chunk's compressed size, or the next chunk header would desynchronize.
-    private long _fastLimit = -1;
+	public Stream Stream = null!;
+	public long Total;
 
-    private bool _fastBufferSafeUnbounded;
+	internal byte[] FastBufferArray => this._fastBuffer ??= this._bytePool.Rent(FAST_BUFFER_SIZE);
 
-    public void SetFastLimit(long limit) => _fastLimit = limit;
+	internal int FastBufferPos { get; set; }
 
-    public void Init(Stream stream)
-    {
-        _stream = stream;
+	internal int FastBufferLen { get; private set; }
 
-        _code = 0;
-        _range = 0xFFFFFFFF;
-        for (var i = 0; i < 5; i++)
-        {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
-        }
-        _total = 5;
+	public bool IsFinished => this.Code == 0;
 
-        _fastLimit = -1;
-        _fastBufferPos = 0;
-        _fastBufferLen = 0;
-        _fastEndOfStream = false;
-        _fastBufferSafeUnbounded = false;
-    }
+	public Decoder(ArrayPool<byte>? bytePool = null)
+	{
+		this._bytePool = bytePool ?? ArrayPool<byte>.Shared;
+	}
 
-    public void ReleaseStream()
-    {
-        ReleaseFastBuffer();
-        _stream = null;
-    }
+	public void SetFastLimit(long limit)
+	{
+		this._fastLimit = limit;
+	}
 
-    // Buffered input used by the unsafe fast LZMA decode path (see LzmaDecoder.Fast.cs). Avoids
-    // issuing a virtual Stream.ReadByte() call per consumed byte, which otherwise dominates
-    // decode time.
-    private const int FastBufferSize = 1 << 16;
-    private byte[] _fastBuffer;
-    private int _fastBufferPos;
-    private int _fastBufferLen;
-    private bool _fastEndOfStream;
+	public void Init(Stream stream)
+	{
+		this.Stream = stream;
 
-    internal byte[] FastBufferArray => _fastBuffer ??= _bytePool.Rent(FastBufferSize);
+		this.Code = 0;
+		this.Range = 0xFFFFFFFF;
+		for (var i = 0; i < 5; i++) this.Code = (this.Code << 8) | (byte)this.Stream.ReadByte();
 
-    internal int FastBufferPos
-    {
-        get => _fastBufferPos;
-        set => _fastBufferPos = value;
-    }
+		this.Total = 5;
 
-    internal int FastBufferLen => _fastBufferLen;
+		this._fastLimit = -1;
+		this.FastBufferPos = 0;
+		this.FastBufferLen = 0;
+		this._fastEndOfStream = false;
+		this._fastBufferSafeUnbounded = false;
+	}
 
-    internal void AddTotal(long consumed) => _total += consumed;
+	public void ReleaseStream()
+	{
+		this.ReleaseFastBuffer();
+		this.Stream = null!;
+	}
 
-    internal void RefillFast() => FillFastBuffer();
+	internal void AddTotal(long consumed)
+	{
+		this.Total += consumed;
+	}
 
-    private void FillFastBuffer()
-    {
-        _fastBuffer ??= _bytePool.Rent(FastBufferSize);
-        if (_fastEndOfStream)
-        {
-            _fastBufferPos = 0;
-            _fastBufferLen = 1;
-            _fastBuffer[0] = 0xFF;
-            return;
-        }
-        var requestSize = _fastBuffer.Length;
-        if (_fastLimit >= 0)
-        {
-            var remaining = _fastLimit - _total;
-            requestSize = remaining <= 0 ? 1 : (int)Math.Min(requestSize, remaining);
-        }
-        else if (!_fastBufferSafeUnbounded)
-        {
-            requestSize = 1;
-        }
-        var read = _stream.Read(_fastBuffer, 0, requestSize);
-        if (read <= 0)
-        {
-            _fastEndOfStream = true;
-            _fastBufferPos = 0;
-            _fastBufferLen = 1;
-            _fastBuffer[0] = 0xFF;
-            return;
-        }
-        _fastBufferPos = 0;
-        _fastBufferLen = read;
-    }
+	internal void RefillFast()
+	{
+		this.FillFastBuffer();
+	}
 
-    private void ReleaseFastBuffer()
-    {
-        if (_fastBuffer is not null)
-        {
-            _bytePool.Return(_fastBuffer);
-            _fastBuffer = null;
-        }
-        _fastBufferPos = 0;
-        _fastBufferLen = 0;
-        _fastEndOfStream = false;
-    }
+	private void FillFastBuffer()
+	{
+		this._fastBuffer ??= this._bytePool.Rent(FAST_BUFFER_SIZE);
+		if (this._fastEndOfStream)
+		{
+			this.FastBufferPos = 0;
+			this.FastBufferLen = 1;
+			this._fastBuffer[0] = 0xFF;
+			return;
+		}
 
-    public void Normalize()
-    {
-        while (_range < K_TOP_VALUE)
-        {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
-            _range <<= 8;
-            _total++;
-        }
-    }
+		var requestSize = this._fastBuffer.Length;
+		if (this._fastLimit >= 0)
+		{
+			var remaining = this._fastLimit - this.Total;
+			requestSize = remaining <= 0 ? 1 : (int)Math.Min(requestSize, remaining);
+		}
+		else if (!this._fastBufferSafeUnbounded) requestSize = 1;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Normalize2()
-    {
-        if (_range < K_TOP_VALUE)
-        {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
-            _range <<= 8;
-            _total++;
-        }
-    }
+		var read = this.Stream.Read(this._fastBuffer, 0, requestSize);
+		if (read <= 0)
+		{
+			this._fastEndOfStream = true;
+			this.FastBufferPos = 0;
+			this.FastBufferLen = 1;
+			this._fastBuffer[0] = 0xFF;
+			return;
+		}
 
-    public uint GetThreshold(uint total) => _code / (_range /= total);
+		this.FastBufferPos = 0;
+		this.FastBufferLen = read;
+	}
 
-    public void Decode(uint start, uint size)
-    {
-        _code -= start * _range;
-        _range *= size;
-        Normalize();
-    }
+	private void ReleaseFastBuffer()
+	{
+		if (this._fastBuffer is not null)
+		{
+			this._bytePool.Return(this._fastBuffer);
+			this._fastBuffer = null!;
+		}
 
-    public uint DecodeDirectBits(int numTotalBits)
-    {
-        var range = _range;
-        var code = _code;
-        uint result = 0;
-        for (var i = numTotalBits; i > 0; i--)
-        {
-            range >>= 1;
-            var t = (code - range) >> 31;
-            code -= range & (t - 1);
-            result = (result << 1) | (1 - t);
+		this.FastBufferPos = 0;
+		this.FastBufferLen = 0;
+		this._fastEndOfStream = false;
+	}
 
-            if (range < K_TOP_VALUE)
-            {
-                code = (code << 8) | (byte)_stream.ReadByte();
-                range <<= 8;
-                _total++;
-            }
-        }
-        _range = range;
-        _code = code;
-        return result;
-    }
+	public void Normalize()
+	{
+		while (this.Range < K_TOP_VALUE)
+		{
+			this.Code = (this.Code << 8) | (byte)this.Stream.ReadByte();
+			this.Range <<= 8;
+			this.Total++;
+		}
+	}
 
-    public uint DecodeBit(uint size0, int numTotalBits)
-    {
-        var newBound = (_range >> numTotalBits) * size0;
-        uint symbol;
-        if (_code < newBound)
-        {
-            symbol = 0;
-            _range = newBound;
-        }
-        else
-        {
-            symbol = 1;
-            _code -= newBound;
-            _range -= newBound;
-        }
-        Normalize();
-        return symbol;
-    }
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void Normalize2()
+	{
+		if (this.Range < K_TOP_VALUE)
+		{
+			this.Code = (this.Code << 8) | (byte)this.Stream.ReadByte();
+			this.Range <<= 8;
+			this.Total++;
+		}
+	}
 
-    public bool IsFinished => _code == 0;
+	public uint GetThreshold(uint total)
+	{
+		return this.Code / (this.Range /= total);
+	}
+
+	public void Decode(uint start, uint size)
+	{
+		this.Code -= start * this.Range;
+		this.Range *= size;
+		this.Normalize();
+	}
+
+	public uint DecodeDirectBits(int numTotalBits)
+	{
+		var range = this.Range;
+		var code = this.Code;
+		uint result = 0;
+		for (var i = numTotalBits; i > 0; i--)
+		{
+			range >>= 1;
+			var t = (code - range) >> 31;
+			code -= range & (t - 1);
+			result = (result << 1) | (1 - t);
+
+			if (range < K_TOP_VALUE)
+			{
+				code = (code << 8) | (byte)this.Stream.ReadByte();
+				range <<= 8;
+				this.Total++;
+			}
+		}
+
+		this.Range = range;
+		this.Code = code;
+		return result;
+	}
+
+	public uint DecodeBit(uint size0, int numTotalBits)
+	{
+		var newBound = (this.Range >> numTotalBits) * size0;
+		uint symbol;
+		if (this.Code < newBound)
+		{
+			symbol = 0;
+			this.Range = newBound;
+		}
+		else
+		{
+			symbol = 1;
+			this.Code -= newBound;
+			this.Range -= newBound;
+		}
+
+		this.Normalize();
+		return symbol;
+	}
 }

@@ -1,239 +1,215 @@
-// Copyright (c) Metric and the Snowflake Authors.
+﻿// Copyright (c) Metric and the Snowflake Authors.
 // Licensed under the Apache License, Version 2.0.
 
 using VCDiff.Includes;
 
-namespace VCDiff.Shared
+namespace VCDiff.Shared;
+
+internal class AddressCache
 {
-    internal class AddressCache
-    {
-        /// <summary>
-        /// The address cache implementation as described in the RFC doc.
-        /// </summary>
-        private const byte DefaultNearCacheSize = 4;
+    /// <summary>
+    ///     The address cache implementation as described in the RFC doc.
+    /// </summary>
+    private const byte DEFAULT_NEAR_CACHE_SIZE = 4;
 
-        private const byte DefaultSameCacheSize = 3;
-        private byte nearSize;
-        private byte sameSize;
-        private long[] nearCache;
-        private long[] sameCache;
-        private int nextSlot;
-        
-        public const byte FirstNear = (byte)VCDiffModes.FIRST;
+	private const byte DEFAULT_SAME_CACHE_SIZE = 3;
 
-        public byte FirstSame => (byte)(VCDiffModes.FIRST + nearSize);
+	public const byte FIRST_NEAR = (byte)VcDiffModes.FIRST;
+	private readonly long[] nearCache;
+	private readonly byte nearSize;
+	private readonly long[] sameCache;
+	private readonly byte sameSize;
+	private int nextSlot;
 
-        public byte Last => (byte)(FirstSame + sameSize - 1);
+	public byte FirstSame => (byte)(VcDiffModes.FIRST + this.nearSize);
 
-        public static byte DefaultLast => (byte)(VCDiffModes.FIRST + DefaultNearCacheSize + DefaultSameCacheSize - 1);
+	public byte Last => (byte)(this.FirstSame + this.sameSize - 1);
 
-        public AddressCache(byte nearSize, byte sameSize)
-        {
-            this.sameSize = sameSize;
-            this.nearSize = nearSize;
-            nearCache = new long[nearSize];
-            sameCache = new long[sameSize * 256];
-            nextSlot = 0;
-        }
+	public static byte DefaultLast => (byte)(VcDiffModes.FIRST + DEFAULT_NEAR_CACHE_SIZE + DEFAULT_SAME_CACHE_SIZE - 1);
 
-        public AddressCache()
-        {
-            sameSize = DefaultSameCacheSize;
-            nearSize = DefaultNearCacheSize;
-            nearCache = new long[nearSize];
-            sameCache = new long[sameSize * 256];
-            nextSlot = 0;
-        }
+	public AddressCache(byte nearSize, byte sameSize)
+	{
+		this.sameSize = sameSize;
+		this.nearSize = nearSize;
+		this.nearCache = new long[nearSize];
+		this.sameCache = new long[sameSize * 256];
+		this.nextSlot = 0;
+	}
 
-        private static bool IsSelfMode(byte mode)
-        {
-            return mode == (byte)VCDiffModes.SELF;
-        }
+	public AddressCache()
+	{
+		this.sameSize = DEFAULT_SAME_CACHE_SIZE;
+		this.nearSize = DEFAULT_NEAR_CACHE_SIZE;
+		this.nearCache = new long[this.nearSize];
+		this.sameCache = new long[this.sameSize * 256];
+		this.nextSlot = 0;
+	}
 
-        private static bool IsHereMode(byte mode)
-        {
-            return mode == (byte)VCDiffModes.HERE;
-        }
+	private static bool IsSelfMode(byte mode)
+	{
+		return mode == (byte)VcDiffModes.SELF;
+	}
 
-        private bool IsNearMode(byte mode)
-        {
-            return (mode >= FirstNear) && (mode < FirstSame);
-        }
+	private static bool IsHereMode(byte mode)
+	{
+		return mode == (byte)VcDiffModes.HERE;
+	}
 
-        private bool IsSameMode(byte mode)
-        {
-            return (mode >= FirstSame) && (mode <= Last);
-        }
+	private bool IsNearMode(byte mode)
+	{
+		return mode >= FIRST_NEAR && mode < this.FirstSame;
+	}
 
-        private static long DecodeSelfAddress(long encoded)
-        {
-            return encoded;
-        }
+	private bool IsSameMode(byte mode)
+	{
+		return mode >= this.FirstSame && mode <= this.Last;
+	}
 
-        private static long DecodeHereAddress(long encoded, long here)
-        {
-            return here - encoded;
-        }
+	private static long DecodeSelfAddress(long encoded)
+	{
+		return encoded;
+	}
 
-        private long DecodeNearAddress(byte mode, long encoded)
-        {
-            return NearAddress(mode - FirstNear) + encoded;
-        }
+	private static long DecodeHereAddress(long encoded, long here)
+	{
+		return here - encoded;
+	}
 
-        private long DecodeSameAddress(byte mode, byte encoded)
-        {
-            return SameAddress(((mode - FirstSame) * 256) + encoded);
-        }
+	private long DecodeNearAddress(byte mode, long encoded)
+	{
+		return this.NearAddress(mode - FIRST_NEAR) + encoded;
+	}
 
-        public bool WriteAddressAsVarint(byte mode)
-        {
-            return !IsSameMode(mode);
-        }
+	private long DecodeSameAddress(byte mode, byte encoded)
+	{
+		return this.SameAddress((mode - this.FirstSame) * 256 + encoded);
+	}
 
-        private long NearAddress(int pos)
-        {
-            return nearCache[pos];
-        }
+	public bool WriteAddressAsVarint(byte mode)
+	{
+		return !this.IsSameMode(mode);
+	}
 
-        private long SameAddress(int pos)
-        {
-            return sameCache[pos];
-        }
+	private long NearAddress(int pos)
+	{
+		return this.nearCache[pos];
+	}
 
-        private void UpdateCache(long address)
-        {
-            if (nearSize > 0)
-            {
-                nearCache[nextSlot] = address;
-                nextSlot = (nextSlot + 1) % nearSize;
-            }
-            if (sameSize > 0)
-            {
-                sameCache[(int)(address % (sameSize * 256))] = address;
-            }
-        }
+	private long SameAddress(int pos)
+	{
+		return this.sameCache[pos];
+	}
 
-        public byte EncodeAddress(long address, long here, out long encoded)
-        {
-            if (address < 0)
-            {
-                encoded = 0;
-                return 0;
-            }
-            if (address >= here)
-            {
-                encoded = 0;
-                return 0;
-            }
+	private void UpdateCache(long address)
+	{
+		if (this.nearSize > 0)
+		{
+			this.nearCache[this.nextSlot] = address;
+			this.nextSlot = (this.nextSlot + 1) % this.nearSize;
+		}
 
-            if (sameSize > 0)
-            {
-                int pos = (int)(address % (sameSize * 256));
-                if (SameAddress(pos) == address)
-                {
-                    UpdateCache(address);
-                    encoded = (pos % 256);
-                    return (byte)(FirstSame + (pos / 256));
-                }
-            }
+		if (this.sameSize > 0) this.sameCache[(int)(address % (this.sameSize * 256))] = address;
+	}
 
-            byte bestMode = (byte)VCDiffModes.SELF;
-            long bestEncoded = address;
+	public byte EncodeAddress(long address, long here, out long encoded)
+	{
+		if (address < 0)
+		{
+			encoded = 0;
+			return 0;
+		}
 
-            long hereEncoded = here - address;
-            if (hereEncoded < bestEncoded)
-            {
-                bestMode = (byte)VCDiffModes.HERE;
-                bestEncoded = hereEncoded;
-            }
+		if (address >= here)
+		{
+			encoded = 0;
+			return 0;
+		}
 
-            for (int i = 0; i < nearSize; ++i)
-            {
-                long nearEncoded = address - NearAddress(i);
-                if ((nearEncoded >= 0) && (nearEncoded < bestEncoded))
-                {
-                    bestMode = (byte)(FirstNear + i);
-                    bestEncoded = nearEncoded;
-                }
-            }
+		if (this.sameSize > 0)
+		{
+			var pos = (int)(address % (this.sameSize * 256));
+			if (this.SameAddress(pos) == address)
+			{
+				this.UpdateCache(address);
+				encoded = pos % 256;
+				return (byte)(this.FirstSame + pos / 256);
+			}
+		}
 
-            UpdateCache(address);
-            encoded = bestEncoded;
-            return bestMode;
-        }
+		var bestMode = (byte)VcDiffModes.SELF;
+		var bestEncoded = address;
 
-        private bool IsDecodedAddressValid(long decoded, long here)
-        {
-            if (decoded < 0)
-            {
-                return false;
-            }
+		var hereEncoded = here - address;
+		if (hereEncoded < bestEncoded)
+		{
+			bestMode = (byte)VcDiffModes.HERE;
+			bestEncoded = hereEncoded;
+		}
 
-            if (decoded >= here)
-            {
-                return false;
-            }
+		for (var i = 0; i < this.nearSize; ++i)
+		{
+			var nearEncoded = address - this.NearAddress(i);
+			if (nearEncoded >= 0 && nearEncoded < bestEncoded)
+			{
+				bestMode = (byte)(FIRST_NEAR + i);
+				bestEncoded = nearEncoded;
+			}
+		}
 
-            return true;
-        }
+		this.UpdateCache(address);
+		encoded = bestEncoded;
+		return bestMode;
+	}
 
-        public long DecodeAddress(long here, byte mode, ByteBuffer sin)
-        {
-            long start = sin.Position;
-            if (here < 0)
-            {
-                return (int)VCDiffResult.ERROR;
-            }
+	private bool IsDecodedAddressValid(long decoded, long here)
+	{
+		if (decoded < 0) return false;
 
-            if (!sin.CanRead)
-            {
-                return (int)VCDiffResult.EOD;
-            }
+		if (decoded >= here) return false;
 
-            long decoded = 0;
-            if (IsSameMode(mode))
-            {
-                byte encoded = sin.ReadByte();
-                decoded = DecodeSameAddress(mode, encoded);
-            }
-            else
-            {
-                int encoded = VarIntBE.ParseInt32(sin);
+		return true;
+	}
 
-                switch (encoded)
-                {
-                    case (int)VCDiffResult.ERROR:
-                        return encoded;
+	public long DecodeAddress(long here, byte mode, ByteBuffer sin)
+	{
+		var start = sin.Position;
+		if (here < 0) return (int)VcDiffResult.ERROR;
 
-                    case (int)VCDiffResult.EOD:
-                        sin.Position = start;
-                        return encoded;
-                }
+		if (!sin.CanRead) return (int)VcDiffResult.EOD;
 
-                if (IsSelfMode(mode))
-                {
-                    decoded = DecodeSelfAddress(encoded);
-                }
-                else if (IsHereMode(mode))
-                {
-                    decoded = DecodeHereAddress(encoded, here);
-                }
-                else if (IsNearMode(mode))
-                {
-                    decoded = DecodeNearAddress(mode, encoded);
-                }
-                else
-                {
-                    return (int)VCDiffResult.ERROR;
-                }
-            }
+		long decoded = 0;
+		if (this.IsSameMode(mode))
+		{
+			var encoded = sin.ReadByte();
+			decoded = this.DecodeSameAddress(mode, encoded);
+		}
+		else
+		{
+			var encoded = VarIntBe.ParseInt32(sin);
 
-            if (!IsDecodedAddressValid(decoded, here))
-            {
-                return (int)VCDiffResult.ERROR;
-            }
-            UpdateCache(decoded);
-            return decoded;
-        }
-    }
+			switch (encoded)
+			{
+				case (int)VcDiffResult.ERROR:
+					return encoded;
+
+				case (int)VcDiffResult.EOD:
+					sin.Position = start;
+					return encoded;
+			}
+
+			if (IsSelfMode(mode))
+				decoded = DecodeSelfAddress(encoded);
+			else if (IsHereMode(mode))
+				decoded = DecodeHereAddress(encoded, here);
+			else if (this.IsNearMode(mode))
+				decoded = this.DecodeNearAddress(mode, encoded);
+			else
+				return (int)VcDiffResult.ERROR;
+		}
+
+		if (!this.IsDecodedAddressValid(decoded, here)) return (int)VcDiffResult.ERROR;
+
+		this.UpdateCache(decoded);
+		return decoded;
+	}
 }

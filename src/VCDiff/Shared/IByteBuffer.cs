@@ -3,46 +3,46 @@
 
 using System;
 using System.Runtime.CompilerServices;
+
 #pragma warning disable 1591
 
-namespace VCDiff.Shared
+namespace VCDiff.Shared;
+
+public interface IByteBuffer : IDisposable
 {
-    public interface IByteBuffer : IDisposable
-    {
-        long Length
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get;
-        }
+	long Length
+	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		get;
+	}
 
-        long Position
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get;
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set;
-        }
+	long Position
+	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		get;
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		set;
+	}
 
-        bool CanRead
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get; 
-        }
+	bool CanRead
+	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		get;
+	}
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        Memory<byte> ReadBytes(int len);
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	Memory<byte> ReadBytes(int len);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        Span<byte> ReadBytesAsSpan(int len);
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	Span<byte> ReadBytesAsSpan(int len);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        Span<byte> ReadBytesToSpan(Span<byte> data);
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	Span<byte> ReadBytesToSpan(Span<byte> data);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        byte ReadByte();
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	byte ReadByte();
 
-        byte PeekByte();
+	byte PeekByte();
 
-        void Next();
-    }
+	void Next();
 }

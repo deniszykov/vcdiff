@@ -1,89 +1,70 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-
-
 
 namespace VCDiff.Compression.Xz;
 
-public partial class XZIndex
+public class XzIndex
 {
-    private readonly BinaryReader _reader;
-    public long StreamStartPosition { get; private set; }
-    public ulong NumberOfRecords { get; private set; }
-    public List<XZIndexRecord> Records { get; } = new();
+	private readonly bool _indexMarkerAlreadyVerified;
+	private readonly BinaryReader _reader;
+	public long StreamStartPosition { get; }
+	public ulong NumberOfRecords { get; private set; }
+	public List<XzIndexRecord> Records { get; } = new();
 
-    private readonly bool _indexMarkerAlreadyVerified;
+	public XzIndex(BinaryReader reader, bool indexMarkerAlreadyVerified)
+	{
+		this._reader = reader;
+		this._indexMarkerAlreadyVerified = indexMarkerAlreadyVerified;
+		this.StreamStartPosition = reader.BaseStream.Position;
+		if (indexMarkerAlreadyVerified) this.StreamStartPosition--;
+	}
 
-    public XZIndex(BinaryReader reader, bool indexMarkerAlreadyVerified)
-    {
-        _reader = reader;
-        _indexMarkerAlreadyVerified = indexMarkerAlreadyVerified;
-        StreamStartPosition = reader.BaseStream.Position;
-        if (indexMarkerAlreadyVerified)
-        {
-            StreamStartPosition--;
-        }
-    }
+	public static XzIndex FromStream(Stream stream, bool indexMarkerAlreadyVerified)
+	{
+		var index = new XzIndex(
+			new BinaryReader(stream, Encoding.UTF8, true),
+			indexMarkerAlreadyVerified
+		);
+		index.Process();
+		return index;
+	}
 
-    public static XZIndex FromStream(Stream stream, bool indexMarkerAlreadyVerified)
-    {
-        var index = new XZIndex(
-            new BinaryReader(stream, Encoding.UTF8, true),
-            indexMarkerAlreadyVerified
-        );
-        index.Process();
-        return index;
-    }
+	public void Process()
+	{
+		if (!this._indexMarkerAlreadyVerified) this.VerifyIndexMarker();
 
-    public void Process()
-    {
-        if (!_indexMarkerAlreadyVerified)
-        {
-            VerifyIndexMarker();
-        }
+		this.NumberOfRecords = this._reader.ReadXzInteger();
+		for (ulong i = 0; i < this.NumberOfRecords; i++) this.Records.Add(XzIndexRecord.FromBinaryReader(this._reader));
 
-        NumberOfRecords = _reader.ReadXZInteger();
-        for (ulong i = 0; i < NumberOfRecords; i++)
-        {
-            Records.Add(XZIndexRecord.FromBinaryReader(_reader));
-        }
-        SkipPadding();
-        VerifyCrc32();
-    }
+		this.SkipPadding();
+		this.VerifyCrc32();
+	}
 
-    private void VerifyIndexMarker()
-    {
-        var marker = _reader.ReadByte();
-        if (marker != 0)
-        {
-            throw new InvalidFormatException("Not an index block");
-        }
-    }
+	private void VerifyIndexMarker()
+	{
+		var marker = this._reader.ReadByte();
+		if (marker != 0) throw new InvalidFormatException("Not an index block");
+	}
 
-    private void SkipPadding()
-    {
-        var bytes = (int)(_reader.BaseStream.Position - StreamStartPosition) % 4;
-        if (bytes > 0)
-        {
-            var paddingBytes = _reader.ReadBytes(4 - bytes);
-            if (paddingBytes.Any(b => b != 0))
-            {
-                throw new InvalidFormatException("Padding bytes were non-null");
-            }
-        }
-    }
+	private void SkipPadding()
+	{
+		var bytes = (int)(this._reader.BaseStream.Position - this.StreamStartPosition) % 4;
+		if (bytes > 0)
+		{
+			var paddingBytes = this._reader.ReadBytes(4 - bytes);
+			if (paddingBytes.Any(b => b != 0)) throw new InvalidFormatException("Padding bytes were non-null");
+		}
+	}
 
-    private void VerifyCrc32()
-    {
-        var crc = _reader.ReadLittleEndianUInt32();
-        // TODO verify this matches
-    }
+	private void VerifyCrc32()
+	{
+		var crc = this._reader.ReadLittleEndianUInt32();
+
+		// TODO verify this matches
+	}
 }

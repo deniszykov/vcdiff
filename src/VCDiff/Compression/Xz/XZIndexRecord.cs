@@ -1,25 +1,24 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-using System;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace VCDiff.Compression.Xz;
 
-public partial class XZIndexRecord
+public class XzIndexRecord
 {
-    public ulong UnpaddedSize { get; private set; }
-    public ulong UncompressedSize { get; private set; }
+	public ulong UnpaddedSize { get; private set; }
+	public ulong UncompressedSize { get; private set; }
 
-    protected XZIndexRecord() { }
+	protected XzIndexRecord()
+	{
+	}
 
-    public static XZIndexRecord FromBinaryReader(BinaryReader br)
-    {
-        var record = new XZIndexRecord();
-        record.UnpaddedSize = br.ReadXZInteger();
-        record.UncompressedSize = br.ReadXZInteger();
-        return record;
-    }
+	public static XzIndexRecord FromBinaryReader(BinaryReader br)
+	{
+		var record = new XzIndexRecord();
+		record.UnpaddedSize = br.ReadXzInteger();
+		record.UncompressedSize = br.ReadXzInteger();
+		return record;
+	}
 }

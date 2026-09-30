@@ -1,44 +1,32 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-using System;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
 
 namespace VCDiff.Compression.Xz;
 
-internal static partial class MultiByteIntegers
+internal static class MultiByteIntegers
 {
-    public static ulong ReadXZInteger(this BinaryReader reader, int MaxBytes = 9)
-    {
-        ThrowHelper.ThrowIfNegativeOrZero(MaxBytes);
+	public static ulong ReadXzInteger(this BinaryReader reader, int maxBytes = 9)
+	{
+		ThrowHelper.ThrowIfNegativeOrZero(maxBytes);
 
-        if (MaxBytes > 9)
-        {
-            MaxBytes = 9;
-        }
+		if (maxBytes > 9) maxBytes = 9;
 
-        var LastByte = reader.ReadByte();
-        var Output = (ulong)LastByte & 0x7F;
+		var lastByte = reader.ReadByte();
+		var output = (ulong)lastByte & 0x7F;
 
-        var i = 0;
-        while ((LastByte & 0x80) != 0)
-        {
-            if (++i >= MaxBytes)
-            {
-                throw new InvalidFormatException();
-            }
+		var i = 0;
+		while ((lastByte & 0x80) != 0)
+		{
+			if (++i >= maxBytes) throw new InvalidFormatException();
 
-            LastByte = reader.ReadByte();
-            if (LastByte == 0)
-            {
-                throw new InvalidFormatException();
-            }
+			lastByte = reader.ReadByte();
+			if (lastByte == 0) throw new InvalidFormatException();
 
-            Output |= ((ulong)(LastByte & 0x7F)) << (i * 7);
-        }
-        return Output;
-    }
+			output |= (ulong)(lastByte & 0x7F) << (i * 7);
+		}
+
+		return output;
+	}
 }

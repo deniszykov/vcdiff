@@ -9,387 +9,382 @@ using VCDiff.Compressors;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
-namespace VCDiff.Decoders
+namespace VCDiff.Decoders;
+
+/// <summary>
+///     Backwards compatibility shim for VCDiff decoder.
+///     Please use <see cref="VcDecoderEx{TSourceBuffer,TDeltaBuffer}" /> if you wish to use different stream sources.
+/// </summary>
+public class VcDecoder : VcDecoderEx<ByteStreamReader, ByteStreamReader>, IDisposable
 {
-    /// <summary>
-    /// Backwards compatibility shim for VCDiff decoder.
-    /// Please use <see cref="VcDecoderEx{TSourceBuffer,TDeltaBuffer}"/> if you wish to use different stream sources.
-    /// </summary>
-    public class VcDecoder : VcDecoderEx<ByteStreamReader, ByteStreamReader>, IDisposable
-    {
-        private readonly bool _ownsSources;
-        private bool _disposed;
-
-        /// <summary>
-        /// Creates a new VCDIFF decoder.
-        /// </summary>
-        /// <param name="source">The dictionary stream, or the base file.</param>
-        /// <param name="delta">The stream containing the VCDIFF delta.</param>
-        /// <param name="outputStream">The stream to write the output in.</param>
-        /// <param name="options">The decoder options. See <see cref="VcDecoderOptions"/>.</param>
-        public VcDecoder(Stream source, Stream delta, Stream outputStream, VcDecoderOptions options)
-            : base(new ByteStreamReader(source, options.BytePool), new ByteStreamReader(delta, options.BytePool), outputStream, options)
-        {
-            _ownsSources = true;
-        }
-
-        /// <summary>
-        /// Creates a new VCDIFF decoder.
-        /// </summary>
-        /// <param name="source">The dictionary stream, or the base file.</param>
-        /// <param name="delta">The stream containing the VCDIFF delta.</param>
-        /// <param name="outputStream">The stream to write the output in.</param>
-        /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
-        /// <param name="disableChecksums">Whether to disable checksums when applying the delta. This can be dangerous, but can be useful when the input file differs in ways that the delta does not reference.</param>
-        public VcDecoder(Stream source, Stream delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DefaultMaxTargetFileSize, bool disableChecksums = false)
-            : this(source, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
-        {
-        }
-
-        /// <inheritdoc />
-        public override void Dispose()
-        {
-            base.Dispose();
-            if (_ownsSources && !_disposed)
-            {
-                base.delta.Dispose();
-                base.source.Dispose();
-                _disposed = true;
-            }
-
-            GC.SuppressFinalize(this);
-        }
-    }
+	private readonly bool _ownsSources;
+	private bool _disposed;
 
     /// <summary>
-    /// A simple VCDIFF decoder class.
+    ///     Creates a new VCDIFF decoder.
     /// </summary>
-    /// <typeparam name="TSourceBuffer">Type of <see cref="IByteBuffer"/> used for the source buffer.</typeparam>
-    /// <typeparam name="TDeltaBuffer">Type of <see cref="IByteBuffer"/> used for the delta buffer.</typeparam>
-    public class VcDecoderEx<TSourceBuffer, TDeltaBuffer> : IDisposable where TSourceBuffer : IByteBuffer
-                                                                        where TDeltaBuffer : IByteBuffer
-    {
-        protected Stream outputStream;
-        protected TDeltaBuffer delta;
-        protected TSourceBuffer source;
-        protected int maxTargetFileSize;
-        protected bool disableChecksums;
-        private CustomCodeTableDecoder? customTable;
-        private readonly ArrayPool<byte> _bytePool;
-        protected static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4, 0x00, 0x00 };
+    /// <param name="source">The dictionary stream, or the base file.</param>
+    /// <param name="delta">The stream containing the VCDIFF delta.</param>
+    /// <param name="outputStream">The stream to write the output in.</param>
+    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
+    public VcDecoder(Stream source, Stream delta, Stream outputStream, VcDecoderOptions options)
+		: base(new ByteStreamReader(source, options.BytePool), new ByteStreamReader(delta, options.BytePool), outputStream, options)
+	{
+		this._ownsSources = true;
+	}
 
-        /// <summary>
-        /// If the provided delta is in Shared-Dictionary Compression over HTTP (Sandwich) protocol.
-        /// </summary>
-        public bool IsSDCHFormat { get; private set; }
+    /// <summary>
+    ///     Creates a new VCDIFF decoder.
+    /// </summary>
+    /// <param name="source">The dictionary stream, or the base file.</param>
+    /// <param name="delta">The stream containing the VCDIFF delta.</param>
+    /// <param name="outputStream">The stream to write the output in.</param>
+    /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
+    /// <param name="disableChecksums">
+    ///     Whether to disable checksums when applying the delta. This can be dangerous, but can be
+    ///     useful when the input file differs in ways that the delta does not reference.
+    /// </param>
+    public VcDecoder
+		(Stream source, Stream delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DEFAULT_MAX_TARGET_FILE_SIZE, bool disableChecksums = false)
+		: this(source, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
+	{
+	}
 
-        private byte SecondaryCompressorId { get; set; }
+	/// <inheritdoc />
+	public override void Dispose()
+	{
+		base.Dispose();
+		if (this._ownsSources && !this._disposed)
+		{
+			this.delta.Dispose();
+			this.source.Dispose();
+			this._disposed = true;
+		}
 
-        /// <summary>
-        /// If the decoder has been initialized.
-        /// </summary>
-        protected bool IsInitialized { get; set; }
+		GC.SuppressFinalize(this);
+	}
+}
 
-        /// <summary>
-        /// Creates a new VCDIFF decoder.
-        /// </summary>
-        /// <param name="dict">The dictionary stream, or the base file.</param>
-        /// <param name="delta">The stream containing the VCDIFF delta.</param>
-        /// <param name="outputStream">The stream to write the output in.</param>
-        /// <param name="options">The decoder options. See <see cref="VcDecoderOptions"/>.</param>
-        public VcDecoderEx(TSourceBuffer dict, TDeltaBuffer delta, Stream outputStream, VcDecoderOptions options)
-        {
-            this.delta  = delta;
-            this.source = dict;
-            this.outputStream = outputStream;
-            this.maxTargetFileSize = options.MaxTargetFileSize;
-            this.disableChecksums = options.DisableChecksums;
-            this._bytePool = options.BytePoolOrDefault;
-            this.IsInitialized = false;
-        }
+/// <summary>
+///     A simple VCDIFF decoder class.
+/// </summary>
+/// <typeparam name="TSourceBufferT">Type of <see cref="IByteBuffer" /> used for the source buffer.</typeparam>
+/// <typeparam name="TDeltaBufferT">Type of <see cref="IByteBuffer" /> used for the delta buffer.</typeparam>
+public class VcDecoderEx<TSourceBufferT, TDeltaBufferT> : IDisposable where TSourceBufferT : IByteBuffer
+                                                                    where TDeltaBufferT : IByteBuffer
+{
+	protected static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4, 0x00, 0x00 };
+	private readonly ArrayPool<byte> _bytePool;
+	private CustomCodeTableDecoder? customTable;
+	protected TDeltaBufferT delta;
+	protected bool disableChecksums;
+	protected int maxTargetFileSize;
+	protected Stream outputStream;
+	protected TSourceBufferT source;
 
-        /// <summary>
-        /// Creates a new VCDIFF decoder.
-        /// </summary>
-        /// <param name="dict">The dictionary stream, or the base file.</param>
-        /// <param name="delta">The stream containing the VCDIFF delta.</param>
-        /// <param name="outputStream">The stream to write the output in.</param>
-        /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
-        /// <param name="disableChecksums">Whether to disable checksums when applying the delta. This can be dangerous, but can be useful when the input file differs in ways that the delta does not reference.</param>
-        public VcDecoderEx(TSourceBuffer dict, TDeltaBuffer delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DefaultMaxTargetFileSize, bool disableChecksums = false)
-            : this(dict, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
-        {
-        }
+    /// <summary>
+    ///     If the provided delta is in Shared-Dictionary Compression over HTTP (Sandwich) protocol.
+    /// </summary>
+    public bool IsSdchFormat { get; private set; }
 
-        /// <summary>
-        /// Call this before calling decode
-        /// This expects at least the header part of the delta file
-        /// is available in the stream
-        /// </summary>
-        /// <returns></returns>
-        private VCDiffResult Initialize()
-        {
-            if (!delta.CanRead) return VCDiffResult.EOD;
+	private byte SecondaryCompressorId { get; set; }
 
-            byte V = delta.ReadByte();
+    /// <summary>
+    ///     If the decoder has been initialized.
+    /// </summary>
+    protected bool IsInitialized { get; set; }
 
-            if (!delta.CanRead) return VCDiffResult.EOD;
+    /// <summary>
+    ///     Creates a new VCDIFF decoder.
+    /// </summary>
+    /// <param name="dict">The dictionary stream, or the base file.</param>
+    /// <param name="delta">The stream containing the VCDIFF delta.</param>
+    /// <param name="outputStream">The stream to write the output in.</param>
+    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
+    public VcDecoderEx(TSourceBufferT dict, TDeltaBufferT delta, Stream outputStream, VcDecoderOptions options)
+	{
+		this.delta = delta;
+		this.source = dict;
+		this.outputStream = outputStream;
+		this.maxTargetFileSize = options.MaxTargetFileSize;
+		this.disableChecksums = options.DisableChecksums;
+		this._bytePool = options.BytePoolOrDefault;
+		this.IsInitialized = false;
+	}
 
-            byte C = delta.ReadByte();
+    /// <summary>
+    ///     Creates a new VCDIFF decoder.
+    /// </summary>
+    /// <param name="dict">The dictionary stream, or the base file.</param>
+    /// <param name="delta">The stream containing the VCDIFF delta.</param>
+    /// <param name="outputStream">The stream to write the output in.</param>
+    /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
+    /// <param name="disableChecksums">
+    ///     Whether to disable checksums when applying the delta. This can be dangerous, but can be
+    ///     useful when the input file differs in ways that the delta does not reference.
+    /// </param>
+    public VcDecoderEx
+	(
+		TSourceBufferT dict,
+		TDeltaBufferT delta,
+		Stream outputStream,
+		int maxTargetFileSize = WindowDecoderBase.DEFAULT_MAX_TARGET_FILE_SIZE,
+		bool disableChecksums = false)
+		: this(dict, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
+	{
+	}
 
-            if (!delta.CanRead) return VCDiffResult.EOD;
+    /// <summary>
+    ///     Call this before calling decode
+    ///     This expects at least the header part of the delta file
+    ///     is available in the stream
+    /// </summary>
+    /// <returns></returns>
+    private VcDiffResult Initialize()
+	{
+		if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            byte D = delta.ReadByte();
+		var v = this.delta.ReadByte();
 
-            if (!delta.CanRead) return VCDiffResult.EOD;
+		if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            byte version = delta.ReadByte();
+		var c = this.delta.ReadByte();
 
-            if (!delta.CanRead) return VCDiffResult.EOD;
+		if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            byte hdr = delta.ReadByte();
+		var d = this.delta.ReadByte();
 
-            if (V != MagicBytes[0])
-            {
-                return VCDiffResult.ERROR;
-            }
+		if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            if (C != MagicBytes[1])
-            {
-                return VCDiffResult.ERROR;
-            }
+		var version = this.delta.ReadByte();
 
-            if (D != MagicBytes[2])
-            {
-                return VCDiffResult.ERROR;
-            }
+		if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            if (version != 0x00 && version != 'S')
-            {
-                return VCDiffResult.ERROR;
-            }
+		var hdr = this.delta.ReadByte();
 
-            // secondary compression
-            if ((hdr & (int)VCDiffCodeFlags.VCDDECOMPRESS) != 0)
-            {
-                if (!delta.CanRead) return VCDiffResult.EOD;
+		if (v != MagicBytes[0]) return VcDiffResult.ERROR;
 
-                SecondaryCompressorId = delta.ReadByte();
-            }
+		if (c != MagicBytes[1]) return VcDiffResult.ERROR;
 
-            //custom code table!
-            if ((hdr & (int)VCDiffCodeFlags.VCDCODETABLE) != 0)
-            {
-                if (!delta.CanRead) return VCDiffResult.EOD;
+		if (d != MagicBytes[2]) return VcDiffResult.ERROR;
 
-                //try decoding the custom code table
-                //since we don't support the compress the next line should be the length of the code table
-                customTable = new CustomCodeTableDecoder();
-                VCDiffResult result = customTable.Decode(delta);
+		if (version != 0x00 && version != 'S') return VcDiffResult.ERROR;
 
-                if (result != VCDiffResult.SUCCESS)
-                {
-                    return result;
-                }
-            }
+		// secondary compression
+		if ((hdr & (int)VcDiffCodeFlags.VCDDECOMPRESS) != 0)
+		{
+			if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            if ((hdr & (int)VCDiffCodeFlags.VCDAPPHEADER) != 0)
-            {
-                if (!delta.CanRead) return VCDiffResult.EOD;
-                
-                int headerLength = VarIntBE.ParseInt32(delta);
-                // skip the app header
-                delta.ReadBytesAsSpan(headerLength);
-            }
+			this.SecondaryCompressorId = this.delta.ReadByte();
+		}
 
+		//custom code table!
+		if ((hdr & (int)VcDiffCodeFlags.VCDCODETABLE) != 0)
+		{
+			if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-            this.IsSDCHFormat = version == 'S';
+			//try decoding the custom code table
+			//since we don't support the compress the next line should be the length of the code table
+			this.customTable = new CustomCodeTableDecoder();
+			var result = this.customTable.Decode(this.delta);
 
-            this.IsInitialized = true;
+			if (result != VcDiffResult.SUCCESS) return result;
+		}
 
-            return VCDiffResult.SUCCESS;
-        }
+		if ((hdr & (int)VcDiffCodeFlags.VCDAPPHEADER) != 0)
+		{
+			if (!this.delta.CanRead) return VcDiffResult.EOD;
 
-        /// <summary>
-        /// Writes the patched file into the output stream.
-        /// </summary>
-        /// <param name="bytesWritten">Number of bytes written into the output stream.</param>
-        /// <returns></returns>
-        public VCDiffResult Decode(out long bytesWritten)
-        {
-            if (!Decode_Init(out bytesWritten, out var result, out var decodeAsync))
-                return result;
+			var headerLength = VarIntBe.ParseInt32(this.delta);
 
-            var secondaryCompressor = SecondaryCompressorId != 0 ? CreateCompressor(SecondaryCompressorId): null;
-            try
-            {
-                while (delta.CanRead)
-                {
-                    //delta is streamed in order aka not random access
-                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize, _bytePool);
+			// skip the app header
+			this.delta.ReadBytesAsSpan(headerLength);
+		}
 
-                    if (!w.Decode(this.IsSDCHFormat, this.SecondaryCompressorId))
-                    {
-                        return (VCDiffResult)w.Result;
-                    }
+		this.IsSdchFormat = version == 'S';
 
-                    using var body = new BodyDecoder<TDeltaBuffer, TSourceBuffer, TDeltaBuffer>(w, source, delta, outputStream, disableChecksums: disableChecksums);
-                    if (this.IsSDCHFormat && w.AddRunLength == 0 && w.AddressesForCopyLength == 0 && w.InstructionAndSizesLength > 0)
-                    {
-                        //interleaved
-                        //decodedinterleave actually has an internal loop for waiting and streaming the incoming rest of the interleaved window
-                        result = body.DecodeInterleave();
+		this.IsInitialized = true;
 
-                        if (result != VCDiffResult.SUCCESS && result != VCDiffResult.EOD)
-                            return result;
+		return VcDiffResult.SUCCESS;
+	}
 
-                        bytesWritten += body.TotalBytesDecoded;
-                    }
-                    //technically add could be 0 if it is all copy instructions
-                    //so do an or check on those two
-                    else if (!this.IsSDCHFormat ||
-                             (this.IsSDCHFormat && (w.AddRunLength > 0 || w.AddressesForCopyLength > 0) &&
-                              w.InstructionAndSizesLength > 0))
-                    {
-                        //not interleaved
-                        //expects the full window to be available
-                        //in the stream
-                        result = body.Decode();
-                        if (result != VCDiffResult.SUCCESS)
-                            return result;
+    /// <summary>
+    ///     Writes the patched file into the output stream.
+    /// </summary>
+    /// <param name="bytesWritten">Number of bytes written into the output stream.</param>
+    /// <returns></returns>
+    public VcDiffResult Decode(out long bytesWritten)
+	{
+		if (!this.Decode_Init(out bytesWritten, out var result, out var decodeAsync))
+			return result;
 
-                        bytesWritten += body.TotalBytesDecoded;
-                    }
-                    else
-                    {
-                        //invalid file
-                        return VCDiffResult.ERROR;
-                    }
-                }
-            }
-            finally
-            {
-                if (secondaryCompressor is IDisposable secondaryCompressorDisposable)
-                {
-                    secondaryCompressorDisposable.Dispose();
-                }
-            }
+		var secondaryCompressor = this.SecondaryCompressorId != 0 ? this.CreateCompressor(this.SecondaryCompressorId) : null;
+		try
+		{
+			while (this.delta.CanRead)
+			{
+				//delta is streamed in order aka not random access
+				using var w = new WindowDecoder<TDeltaBufferT>(this.source.Length, this.delta, secondaryCompressor, this.maxTargetFileSize, this._bytePool);
 
+				if (!w.Decode(this.IsSdchFormat, this.SecondaryCompressorId)) return (VcDiffResult)w.Result;
 
-            return result;
-        }
+				using var body = new BodyDecoder<TDeltaBufferT, TSourceBufferT, TDeltaBufferT>(w, this.source, this.delta, this.outputStream,
+					disableChecksums: this.disableChecksums);
+				if (this.IsSdchFormat && w.AddRunLength == 0 && w.AddressesForCopyLength == 0 && w.InstructionAndSizesLength > 0)
+				{
+					//interleaved
+					//decodedinterleave actually has an internal loop for waiting and streaming the incoming rest of the interleaved window
+					result = body.DecodeInterleave();
 
-        /// <summary>
-        /// Writes the patched file into the output stream asynchronously.
-        /// This method is only asynchronous for the final step of writing the patched data into the output stream.
-        /// For large outputs, this may be beneficial.
-        /// </summary>
-        /// <returns></returns>
-        public async Task<(VCDiffResult result, long bytesWritten)> DecodeAsync()
-        {
-            if (!Decode_Init(out var bytesWritten, out var result, out var decodeAsync)) 
-                return decodeAsync;
+					if (result != VcDiffResult.SUCCESS && result != VcDiffResult.EOD)
+						return result;
 
-            var secondaryCompressor = SecondaryCompressorId != 0 ? CreateCompressor(SecondaryCompressorId) : null;
-            try
-            {
-                while (delta.CanRead)
-                {
-                    //delta is streamed in order aka not random access
-                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize, _bytePool);
+					bytesWritten += body.TotalBytesDecoded;
+				}
 
-                    if (w.Decode(this.IsSDCHFormat, this.SecondaryCompressorId))
-                    {
-                        using var body = new BodyDecoder<TDeltaBuffer, TSourceBuffer, TDeltaBuffer>(w, source, delta, outputStream, disableChecksums: disableChecksums);
-                        if (this.IsSDCHFormat && w.AddRunLength == 0 && w.AddressesForCopyLength == 0 && w.InstructionAndSizesLength > 0)
-                        {
-                            //interleaved
-                            //decodedinterleave actually has an internal loop for waiting and streaming the incoming rest of the interleaved window
-                            result = await body.DecodeInterleaveAsync();
+				//technically add could be 0 if it is all copy instructions
+				//so do an or check on those two
+				else if (!this.IsSdchFormat ||
+						(this.IsSdchFormat &&
+							(w.AddRunLength > 0 || w.AddressesForCopyLength > 0) &&
+							w.InstructionAndSizesLength > 0))
+				{
+					//not interleaved
+					//expects the full window to be available
+					//in the stream
+					result = body.Decode();
+					if (result != VcDiffResult.SUCCESS)
+						return result;
 
-                            if (result != VCDiffResult.SUCCESS && result != VCDiffResult.EOD)
-                                return (result, bytesWritten);
+					bytesWritten += body.TotalBytesDecoded;
+				}
+				else
+				{
+					//invalid file
+					return VcDiffResult.ERROR;
+				}
+			}
+		}
+		finally
+		{
+			if (secondaryCompressor is IDisposable secondaryCompressorDisposable) secondaryCompressorDisposable.Dispose();
+		}
 
-                            bytesWritten += body.TotalBytesDecoded;
-                        }
-                        //technically add could be 0 if it is all copy instructions
-                        //so do an or check on those two
-                        else if (!this.IsSDCHFormat || (this.IsSDCHFormat && (w.AddRunLength > 0 || w.AddressesForCopyLength > 0) &&
-                                                        w.InstructionAndSizesLength > 0))
-                        {
-                            //not interleaved
-                            //expects the full window to be available
-                            //in the stream
-                            result = await body.DecodeAsync();
+		return result;
+	}
 
-                            if (result != VCDiffResult.SUCCESS)
-                                return (result, bytesWritten);
+    /// <summary>
+    ///     Writes the patched file into the output stream asynchronously.
+    ///     This method is only asynchronous for the final step of writing the patched data into the output stream.
+    ///     For large outputs, this may be beneficial.
+    /// </summary>
+    /// <returns></returns>
+    public async Task<(VcDiffResult result, long bytesWritten)> DecodeAsync()
+	{
+		if (!this.Decode_Init(out var bytesWritten, out var result, out var decodeAsync))
+			return decodeAsync;
 
-                            bytesWritten += body.TotalBytesDecoded;
-                        }
-                        else
-                        {
-                            //invalid file
-                            return (VCDiffResult.ERROR, bytesWritten);
-                        }
-                    }
-                    else
-                    {
-                        return ((VCDiffResult)w.Result, bytesWritten);
-                    }
-                }
-            }
-            finally
-            {
-                if (secondaryCompressor is IDisposable secondaryCompressorDisposable)
-                {
-                    secondaryCompressorDisposable.Dispose();
-                }
-            }
+		var secondaryCompressor = this.SecondaryCompressorId != 0 ? this.CreateCompressor(this.SecondaryCompressorId) : null;
+		try
+		{
+			while (this.delta.CanRead)
+			{
+				//delta is streamed in order aka not random access
+				using var w = new WindowDecoder<TDeltaBufferT>(this.source.Length, this.delta, secondaryCompressor, this.maxTargetFileSize, this._bytePool);
 
-            return (result, bytesWritten);
-        }
+				if (w.Decode(this.IsSdchFormat, this.SecondaryCompressorId))
+				{
+					using var body = new BodyDecoder<TDeltaBufferT, TSourceBufferT, TDeltaBufferT>(w, this.source, this.delta, this.outputStream,
+						disableChecksums: this.disableChecksums);
+					if (this.IsSdchFormat && w.AddRunLength == 0 && w.AddressesForCopyLength == 0 && w.InstructionAndSizesLength > 0)
+					{
+						//interleaved
+						//decodedinterleave actually has an internal loop for waiting and streaming the incoming rest of the interleaved window
+						result = await body.DecodeInterleaveAsync();
 
-        private bool Decode_Init(out long bytesWritten, out VCDiffResult result, out (VCDiffResult result, long bytesWritten) decodeAsync)
-        {
-            bytesWritten = 0;
-            if (!this.IsInitialized)
-            {
-                var initializeResult = this.Initialize();
-                if (initializeResult != VCDiffResult.SUCCESS || !this.IsInitialized)
-                {
-                    decodeAsync = (initializeResult, bytesWritten);
-                    result      = initializeResult;
-                    return false;
-                }
-            }
+						if (result != VcDiffResult.SUCCESS && result != VcDiffResult.EOD)
+							return (result, bytesWritten);
 
-            result = VCDiffResult.SUCCESS;
-            if (!delta.CanRead)
-            {
-                decodeAsync = (VCDiffResult.EOD, bytesWritten);
-                return false;
-            }
+						bytesWritten += body.TotalBytesDecoded;
+					}
 
-            decodeAsync = default;
-            return true;
-        }
+					//technically add could be 0 if it is all copy instructions
+					//so do an or check on those two
+					else if (!this.IsSdchFormat ||
+							(this.IsSdchFormat &&
+								(w.AddRunLength > 0 || w.AddressesForCopyLength > 0) &&
+								w.InstructionAndSizesLength > 0))
+					{
+						//not interleaved
+						//expects the full window to be available
+						//in the stream
+						result = await body.DecodeAsync();
 
-        private ICompressor? CreateCompressor(byte secondaryCompressorId)
-        {
-            return secondaryCompressorId switch
-            {
-                0 => null,
-                // xdelta defines 1 to be "DJW static huffman"
-                2 => new XzCompressor(_bytePool),
-                // xdelta defines 16 to be "FGK adaptive huffman" but says it's non-standard
-                _ => throw new NotSupportedException($"Secondary compression id '{secondaryCompressorId}' is not supported.")
-            };
-        }
+						if (result != VcDiffResult.SUCCESS)
+							return (result, bytesWritten);
 
-        /// <summary>
-        /// Disposes the decoder
-        /// </summary>
-        public virtual void Dispose() { }
-    }
+						bytesWritten += body.TotalBytesDecoded;
+					}
+					else
+					{
+						//invalid file
+						return (VcDiffResult.ERROR, bytesWritten);
+					}
+				}
+				else
+					return ((VcDiffResult)w.Result, bytesWritten);
+			}
+		}
+		finally
+		{
+			if (secondaryCompressor is IDisposable secondaryCompressorDisposable) secondaryCompressorDisposable.Dispose();
+		}
+
+		return (result, bytesWritten);
+	}
+
+	private bool Decode_Init(out long bytesWritten, out VcDiffResult result, out (VcDiffResult result, long bytesWritten) decodeAsync)
+	{
+		bytesWritten = 0;
+		if (!this.IsInitialized)
+		{
+			var initializeResult = this.Initialize();
+			if (initializeResult != VcDiffResult.SUCCESS || !this.IsInitialized)
+			{
+				decodeAsync = (initializeResult, bytesWritten);
+				result = initializeResult;
+				return false;
+			}
+		}
+
+		result = VcDiffResult.SUCCESS;
+		if (!this.delta.CanRead)
+		{
+			decodeAsync = (VcDiffResult.EOD, bytesWritten);
+			return false;
+		}
+
+		decodeAsync = default;
+		return true;
+	}
+
+	private ICompressor? CreateCompressor(byte secondaryCompressorId)
+	{
+		return secondaryCompressorId switch {
+			0 => null,
+
+			// xdelta defines 1 to be "DJW static huffman"
+			2 => new XzCompressor(this._bytePool),
+
+			// xdelta defines 16 to be "FGK adaptive huffman" but says it's non-standard
+			_ => throw new NotSupportedException($"Secondary compression id '{secondaryCompressorId}' is not supported.")
+		};
+	}
+
+    /// <summary>
+    ///     Disposes the decoder
+    /// </summary>
+    public virtual void Dispose()
+	{
+	}
 }

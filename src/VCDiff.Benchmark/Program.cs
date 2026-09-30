@@ -1,14 +1,12 @@
-﻿using System;
-using BenchmarkDotNet.Running;
+﻿using BenchmarkDotNet.Running;
 
-namespace VCDiff.Benchmark
+namespace VCDiff.Benchmark;
+
+internal class Program
 {
-    class Program
-    {
-        static void Main(string[] args)
-        {
-            BenchmarkRunner.Run<RandomDataDecode>();
-            BenchmarkRunner.Run<RandomDataEncode>();
-        }
-    }
+	private static void Main(string[] args)
+	{
+		BenchmarkRunner.Run<RandomDataDecode>();
+		BenchmarkRunner.Run<RandomDataEncode>();
+	}
 }

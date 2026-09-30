@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using VCDiff.Decoders;
 using VCDiff.Encoders;
@@ -9,351 +10,352 @@ using VCDiff.Includes;
 using VCDiff.Shared;
 using Xunit;
 
-namespace VCDiff.Tests
+namespace VCDiff.Tests;
+
+/// <summary>
+///     The streaming encoder and decoder read the dictionary in place from a segmented
+///     <see cref="ReadOnlySequence{T}" />; the result must not depend on how it is split.
+/// </summary>
+public class SegmentedDictionaryTests
 {
+	private sealed class Segment : ReadOnlySequenceSegment<byte>
+	{
+		public Segment(ReadOnlyMemory<byte> memory)
+		{
+			this.Memory = memory;
+		}
+
+		public Segment Append(ReadOnlyMemory<byte> memory)
+		{
+			var next = new Segment(memory) { RunningIndex = this.RunningIndex + this.Memory.Length };
+			this.Next = next;
+			return next;
+		}
+	}
+
     /// <summary>
-    /// The streaming encoder and decoder read the dictionary in place from a segmented
-    /// <see cref="ReadOnlySequence{T}"/>; the result must not depend on how it is split.
+    ///     Splits <paramref name="data" /> into separately allocated segments whose sizes cycle through
+    ///     <paramref name="sizes" />.
+    ///     A size of zero produces an empty segment.
     /// </summary>
-    public class SegmentedDictionaryTests
-    {
-        private sealed class Segment : ReadOnlySequenceSegment<byte>
-        {
-            public Segment(ReadOnlyMemory<byte> memory) => Memory = memory;
+    private static ReadOnlySequence<byte> Split(byte[] data, params int[] sizes)
+	{
+		if (sizes.Length == 0)
+			return new ReadOnlySequence<byte>(data);
 
-            public Segment Append(ReadOnlyMemory<byte> memory)
-            {
-                var next = new Segment(memory) { RunningIndex = RunningIndex + Memory.Length };
-                Next = next;
-                return next;
-            }
-        }
+		Segment first = null;
+		Segment last = null;
+		var pos = 0;
+		for (var i = 0; pos < data.Length; i++)
+		{
+			var size = Math.Min(sizes[i % sizes.Length], data.Length - pos);
+			var copy = data.AsSpan(pos, size).ToArray();
+			pos += size;
+			if (first == null)
+				first = last = new Segment(copy);
+			else
+				last = last.Append(copy);
+		}
 
-        /// <summary>
-        /// Splits <paramref name="data"/> into separately allocated segments whose sizes cycle through <paramref name="sizes"/>.
-        /// A size of zero produces an empty segment.
-        /// </summary>
-        private static ReadOnlySequence<byte> Split(byte[] data, params int[] sizes)
-        {
-            if (sizes.Length == 0)
-                return new ReadOnlySequence<byte>(data);
+		return new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
+	}
 
-            Segment first = null;
-            Segment last = null;
-            int pos = 0;
-            for (int i = 0; pos < data.Length; i++)
-            {
-                int size = Math.Min(sizes[i % sizes.Length], data.Length - pos);
-                var copy = data.AsSpan(pos, size).ToArray();
-                pos += size;
-                if (first == null)
-                    first = last = new Segment(copy);
-                else
-                    last = last.Append(copy);
-            }
+	public static IEnumerable<object[]> Layouts()
+	{
+		yield return new object[] { Array.Empty<int>() };
+		yield return new object[] { new[] { 4096 } };
+		yield return new object[] { new[] { 131072 } };
+		yield return new object[] { new[] { 1000 } };
 
-            return new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
-        }
+		// Segments smaller than a block, empty segments and boundaries inside blocks.
+		yield return new object[] { new[] { 1, 7, 0, 15, 17, 33, 1000, 3, 0, 0, 5000 } };
+	}
 
-        public static IEnumerable<object[]> Layouts()
-        {
-            yield return new object[] { Array.Empty<int>() };
-            yield return new object[] { new[] { 4096 } };
-            yield return new object[] { new[] { 131072 } };
-            yield return new object[] { new[] { 1000 } };
-            // Segments smaller than a block, empty segments and boundaries inside blocks.
-            yield return new object[] { new[] { 1, 7, 0, 15, 17, 33, 1000, 3, 0, 0, 5000 } };
-        }
+	private static byte[] MakeDictionary(int size, int seed)
+	{
+		var rnd = new Random(seed);
+		var data = new byte[size];
+		var pos = 0;
+		while (pos < size)
+		{
+			var len = Math.Min(rnd.Next(16, 600), size - pos);
+			switch (rnd.Next(4))
+			{
+				case 0 when pos > 1000:
+					// Repeat earlier content so that several blocks share a hash.
+					Array.Copy(data, rnd.Next(pos - len > 0 ? pos - len : 1), data, pos, Math.Min(len, pos));
+					break;
+				case 1:
+					data.AsSpan(pos, len).Fill((byte)rnd.Next(256));
+					break;
+				default:
+					rnd.NextBytes(data.AsSpan(pos, len));
+					break;
+			}
 
-        private static byte[] MakeDictionary(int size, int seed)
-        {
-            var rnd = new Random(seed);
-            var data = new byte[size];
-            int pos = 0;
-            while (pos < size)
-            {
-                int len = Math.Min(rnd.Next(16, 600), size - pos);
-                switch (rnd.Next(4))
-                {
-                    case 0 when pos > 1000:
-                        // Repeat earlier content so that several blocks share a hash.
-                        Array.Copy(data, rnd.Next(pos - len > 0 ? pos - len : 1), data, pos, Math.Min(len, pos));
-                        break;
-                    case 1:
-                        data.AsSpan(pos, len).Fill((byte)rnd.Next(256));
-                        break;
-                    default:
-                        rnd.NextBytes(data.AsSpan(pos, len));
-                        break;
-                }
+			pos += len;
+		}
 
-                pos += len;
-            }
+		return data;
+	}
 
-            return data;
-        }
+	private static byte[] MakeTarget(byte[] dict, int size, int seed)
+	{
+		var rnd = new Random(seed);
+		var target = new MemoryStream();
+		while (target.Length < size)
+		{
+			if (rnd.Next(4) == 0)
+			{
+				var insert = new byte[rnd.Next(1, 300)];
+				rnd.NextBytes(insert);
+				target.Write(insert);
+			}
+			else
+			{
+				var len = rnd.Next(20, 6000);
+				var offset = rnd.Next(dict.Length - len);
+				var copy = dict.AsSpan(offset, len).ToArray();
+				if (rnd.Next(3) == 0)
+					copy[rnd.Next(len)] ^= 0x55;
+				target.Write(copy);
+			}
+		}
 
-        private static byte[] MakeTarget(byte[] dict, int size, int seed)
-        {
-            var rnd = new Random(seed);
-            var target = new MemoryStream();
-            while (target.Length < size)
-            {
-                if (rnd.Next(4) == 0)
-                {
-                    var insert = new byte[rnd.Next(1, 300)];
-                    rnd.NextBytes(insert);
-                    target.Write(insert);
-                }
-                else
-                {
-                    int len = rnd.Next(20, 6000);
-                    int offset = rnd.Next(dict.Length - len);
-                    var copy = dict.AsSpan(offset, len).ToArray();
-                    if (rnd.Next(3) == 0)
-                        copy[rnd.Next(len)] ^= 0x55;
-                    target.Write(copy);
-                }
-            }
+		return target.ToArray();
+	}
 
-            return target.ToArray();
-        }
+	private static byte[] Encode(ReadOnlySequence<byte> dict, byte[] target, VcEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
+	{
+		using var enc = new VcDiffEncoder(dict, options);
+		var result = new MemoryStream();
+		var outBuf = new byte[outChunk];
+		var input = target.AsSpan();
+		while (true)
+		{
+			var chunk = input.Slice(0, Math.Min(inChunk, input.Length));
+			var status = enc.Encode(chunk, outBuf, out var consumed, out var written, chunk.Length == input.Length);
+			result.Write(outBuf, 0, written);
+			input = input.Slice(consumed);
+			if (status == OperationStatus.Done && input.Length == 0)
+				break;
+		}
 
-        private static byte[] Encode(ReadOnlySequence<byte> dict, byte[] target, VcEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
-        {
-            using var enc = new VcDiffEncoder(dict, options);
-            var result = new MemoryStream();
-            var outBuf = new byte[outChunk];
-            var input = target.AsSpan();
-            while (true)
-            {
-                var chunk = input.Slice(0, Math.Min(inChunk, input.Length));
-                var status = enc.Encode(chunk, outBuf, out int consumed, out int written, isFinal: chunk.Length == input.Length);
-                result.Write(outBuf, 0, written);
-                input = input.Slice(consumed);
-                if (status == OperationStatus.Done && input.Length == 0)
-                    break;
-            }
+		return result.ToArray();
+	}
 
-            return result.ToArray();
-        }
+	private static byte[] Decode(ReadOnlySequence<byte> dict, byte[] delta, int inChunk = 50000, int outChunk = 4096)
+	{
+		using var dec = new VcDiffDecoder(dict);
+		var result = new MemoryStream();
+		var outBuf = new byte[outChunk];
+		var input = delta.AsSpan();
+		while (true)
+		{
+			var chunk = input.Slice(0, Math.Min(inChunk, input.Length));
+			var status = dec.Decode(chunk, outBuf, out var consumed, out var written, chunk.Length == input.Length);
+			result.Write(outBuf, 0, written);
+			input = input.Slice(consumed);
+			Assert.NotEqual(OperationStatus.InvalidData, status);
+			if (status == OperationStatus.Done)
+				break;
+		}
 
-        private static byte[] Decode(ReadOnlySequence<byte> dict, byte[] delta, int inChunk = 50000, int outChunk = 4096)
-        {
-            using var dec = new VcDiffDecoder(dict);
-            var result = new MemoryStream();
-            var outBuf = new byte[outChunk];
-            var input = delta.AsSpan();
-            while (true)
-            {
-                var chunk = input.Slice(0, Math.Min(inChunk, input.Length));
-                var status = dec.Decode(chunk, outBuf, out int consumed, out int written, isFinal: chunk.Length == input.Length);
-                result.Write(outBuf, 0, written);
-                input = input.Slice(consumed);
-                Assert.NotEqual(OperationStatus.InvalidData, status);
-                if (status == OperationStatus.Done)
-                    break;
-            }
+		Assert.Equal(0, input.Length);
+		return result.ToArray();
+	}
 
-            Assert.Equal(0, input.Length);
-            return result.ToArray();
-        }
+	private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, ChecksumFormat checksumFormat, int blockSize)
+	{
+		using var src = new MemoryStream(dict);
+		using var tgt = new MemoryStream(target);
+		using var delta = new MemoryStream();
+		using var enc = new VcEncoder(src, tgt, delta, blockSize: blockSize);
+		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode(interleaved, checksumFormat));
+		return delta.ToArray();
+	}
 
-        private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, ChecksumFormat checksumFormat, int blockSize)
-        {
-            using var src = new MemoryStream(dict);
-            using var tgt = new MemoryStream(target);
-            using var delta = new MemoryStream();
-            using var enc = new VcEncoder(src, tgt, delta, blockSize: blockSize);
-            Assert.Equal(VCDiffResult.SUCCESS, enc.Encode(interleaved, checksumFormat));
-            return delta.ToArray();
-        }
+	private static string Hash(byte[] data)
+	{
+		return Convert.ToHexString(SHA256.HashData(data));
+	}
 
-        private static string Hash(byte[] data) => Convert.ToHexString(SHA256.HashData(data));
+	// Deltas produced by the contiguous dictionary implementation (before dictionaries could be segmented).
+	private static readonly Dictionary<string, string> Golden = new() {
+		{ "False/None/16", "43076B0B7EBA0F3AAFA13E849844318B5D2E49CAB3EF6127FB5C9D9B972675F7" },
+		{ "False/SDCH/16", "3A09E6CB91FBC611D6382180F550BD75CB7D9F12C5174A4ED54196F201F33A6F" },
+		{ "False/Xdelta3/32", "BB69E1BCACE6D50F90FBE2CB84F141F24CEC2C5F5A828AA65C64DB8E8B43EAD6" },
+		{ "True/None/16", "BD70E4641D87C1FF2824CB3967CD717F400E0D191C4B6A4F7D28F281BEFFF463" },
+		{ "True/SDCH/32", "C2C4A694A27C3DAA16A7A0D23940F9CE18995B9C7B9D7DCF714F691083FD2641" }
+	};
 
-        // Deltas produced by the contiguous dictionary implementation (before dictionaries could be segmented).
-        private static readonly Dictionary<string, string> Golden = new()
-        {
-            { "False/None/16", "43076B0B7EBA0F3AAFA13E849844318B5D2E49CAB3EF6127FB5C9D9B972675F7" },
-            { "False/SDCH/16", "3A09E6CB91FBC611D6382180F550BD75CB7D9F12C5174A4ED54196F201F33A6F" },
-            { "False/Xdelta3/32", "BB69E1BCACE6D50F90FBE2CB84F141F24CEC2C5F5A828AA65C64DB8E8B43EAD6" },
-            { "True/None/16", "BD70E4641D87C1FF2824CB3967CD717F400E0D191C4B6A4F7D28F281BEFFF463" },
-            { "True/SDCH/32", "C2C4A694A27C3DAA16A7A0D23940F9CE18995B9C7B9D7DCF714F691083FD2641" },
-        };
+	[Theory, InlineData(false, ChecksumFormat.None, 16), InlineData(false, ChecksumFormat.SDCH, 16), InlineData(false, ChecksumFormat.Xdelta3, 32),
+	InlineData(true, ChecksumFormat.None, 16), InlineData(true, ChecksumFormat.SDCH, 32)]
+	public void Encoder_Output_DoesNotDependOnSegmentation(bool interleaved, ChecksumFormat checksumFormat, int blockSize)
+	{
+		var dict = MakeDictionary(300_000, 11);
+		var target = MakeTarget(dict, 1_300_000, 12);
+		var key = $"{interleaved}/{checksumFormat}/{blockSize}";
+		Assert.True(Golden.TryGetValue(key, out var golden), $"{{ \"{key}\", \"{Hash(LegacyEncode(dict, target, interleaved, checksumFormat, blockSize))}\" }},");
 
-        [Theory]
-        [InlineData(false, ChecksumFormat.None, 16)]
-        [InlineData(false, ChecksumFormat.SDCH, 16)]
-        [InlineData(false, ChecksumFormat.Xdelta3, 32)]
-        [InlineData(true, ChecksumFormat.None, 16)]
-        [InlineData(true, ChecksumFormat.SDCH, 32)]
-        public void Encoder_Output_DoesNotDependOnSegmentation(bool interleaved, ChecksumFormat checksumFormat, int blockSize)
-        {
-            var dict = MakeDictionary(300_000, 11);
-            var target = MakeTarget(dict, 1_300_000, 12);
-            string key = $"{interleaved}/{checksumFormat}/{blockSize}";
-            Assert.True(Golden.TryGetValue(key, out var golden), $"{{ \"{key}\", \"{Hash(LegacyEncode(dict, target, interleaved, checksumFormat, blockSize))}\" }},");
+		Assert.Equal(golden, Hash(LegacyEncode(dict, target, interleaved, checksumFormat, blockSize)));
 
-            Assert.Equal(golden, Hash(LegacyEncode(dict, target, interleaved, checksumFormat, blockSize)));
+		foreach (var layout in Layouts())
+		{
+			var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = checksumFormat, BlockSize = blockSize };
+			var delta = Encode(Split(dict, (int[])layout[0]), target, options);
+			Assert.Equal(golden, Hash(delta));
+		}
+	}
 
-            foreach (var layout in Layouts())
-            {
-                var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = checksumFormat, BlockSize = blockSize };
-                var delta = Encode(Split(dict, (int[])layout[0]), target, options);
-                Assert.Equal(golden, Hash(delta));
-            }
-        }
+	[Theory, MemberData(nameof(Layouts))]
+	public void Decoder_Decodes_WithSegmentedDictionary(int[] layout)
+	{
+		var dict = MakeDictionary(300_000, 21);
+		var target = MakeTarget(dict, 1_300_000, 22);
 
-        [Theory]
-        [MemberData(nameof(Layouts))]
-        public void Decoder_Decodes_WithSegmentedDictionary(int[] layout)
-        {
-            var dict = MakeDictionary(300_000, 21);
-            var target = MakeTarget(dict, 1_300_000, 22);
+		foreach (var interleaved in new[] { false, true })
+		{
+			var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
+			var delta = Encode(new ReadOnlySequence<byte>(dict), target, options);
 
-            foreach (bool interleaved in new[] { false, true })
-            {
-                var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
-                var delta = Encode(new ReadOnlySequence<byte>(dict), target, options);
+			Assert.Equal(target, Decode(Split(dict, layout), delta));
+			Assert.Equal(target, Decode(Split(dict, layout), delta, 7, 5000));
+		}
+	}
 
-                Assert.Equal(target, Decode(Split(dict, layout), delta));
-                Assert.Equal(target, Decode(Split(dict, layout), delta, inChunk: 7, outChunk: 5000));
-            }
-        }
+	private sealed class TrackingMemoryManager : MemoryManager<byte>
+	{
+		private readonly byte[] data;
+		private GCHandle handle;
 
-        [Fact]
-        public void Encoder_DoesNotCopyDictionary()
-        {
-            var dict = MakeDictionary(100_000, 31);
-            var target = MakeTarget(dict, 50_000, 32);
-            var owner = new TrackingMemoryManager(dict);
+		public int Pins { get; private set; }
 
-            using (var enc = new VcDiffEncoder(new ReadOnlySequence<byte>(owner.Memory)))
-            {
-                Assert.Equal(1, owner.Pins);
-            }
+		public TrackingMemoryManager(byte[] data)
+		{
+			this.data = data;
+		}
 
-            Assert.Equal(0, owner.Pins);
+		public override Span<byte> GetSpan()
+		{
+			return this.data;
+		}
 
-            using (var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(owner.Memory)))
-            {
-                Assert.Equal(1, owner.Pins);
-            }
+		public override unsafe MemoryHandle Pin(int elementIndex = 0)
+		{
+			if (this.Pins++ == 0) this.handle = GCHandle.Alloc(this.data, GCHandleType.Pinned);
 
-            Assert.Equal(0, owner.Pins);
-        }
+			return new MemoryHandle((byte*)this.handle.AddrOfPinnedObject() + elementIndex, default, this);
+		}
 
-        [Fact]
-        public void LegacyEncoder_ByteBufferDictionary_MatchesStreamDictionary()
-        {
-            var dict = MakeDictionary(300_000, 41);
-            var target = MakeTarget(dict, 400_000, 42);
+		public override void Unpin()
+		{
+			if (--this.Pins == 0) this.handle.Free();
+		}
 
-            using var buffer = new ByteBuffer(dict);
-            using var tgt = new MemoryStream(target);
-            using var delta = new MemoryStream();
-            using (var enc = new VcEncoder(buffer, tgt, delta))
-                Assert.Equal(VCDiffResult.SUCCESS, enc.Encode());
+		protected override void Dispose(bool disposing)
+		{
+		}
+	}
 
-            Assert.Equal(LegacyEncode(dict, target, false, ChecksumFormat.None, 16), delta.ToArray());
-        }
+	// ------------------------------------------------------------------ bounded buffering
 
-        // ------------------------------------------------------------------ bounded buffering
+	[Fact]
+	public void Decoder_ConsumesInputOnlyAsOutputIsDrained()
+	{
+		var dict = MakeDictionary(300_000, 51);
+		var target = MakeTarget(dict, 3_000_000, 52);
+		var rnd = new Random(53);
 
-        [Fact]
-        public void Decoder_ConsumesInputOnlyAsOutputIsDrained()
-        {
-            var dict = MakeDictionary(300_000, 51);
-            var target = MakeTarget(dict, 3_000_000, 52);
-            var rnd = new Random(53);
-            // Random data does not match the dictionary, so the delta is about as large as the target.
-            rnd.NextBytes(target.AsSpan(100_000, 2_500_000));
+		// Random data does not match the dictionary, so the delta is about as large as the target.
+		rnd.NextBytes(target.AsSpan(100_000, 2_500_000));
 
-            foreach (bool interleaved in new[] { false, true })
-            {
-                var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
-                Assert.True(delta.Length > 2_500_000);
+		foreach (var interleaved in new[] { false, true })
+		{
+			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
+			Assert.True(delta.Length > 2_500_000);
 
-                using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
-                var outBuf = new byte[1024];
+			using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
+			var outBuf = new byte[1024];
 
-                // The whole delta is offered at once, but only a little output space is available.
-                var status = dec.Decode(delta, outBuf, out int consumed, out int written, isFinal: true);
-                Assert.Equal(OperationStatus.DestinationTooSmall, status);
-                Assert.Equal(outBuf.Length, written);
-                // At most one window (1 MiB) plus the internal input buffer may have been taken.
-                Assert.True(consumed < 1_200_000, $"consumed {consumed} of {delta.Length}");
+			// The whole delta is offered at once, but only a little output space is available.
+			var status = dec.Decode(delta, outBuf, out var consumed, out var written, true);
+			Assert.Equal(OperationStatus.DestinationTooSmall, status);
+			Assert.Equal(outBuf.Length, written);
 
-                var result = new MemoryStream();
-                result.Write(outBuf, 0, written);
-                var input = delta.AsSpan(consumed);
-                while (status != OperationStatus.Done)
-                {
-                    status = dec.Decode(input, outBuf, out consumed, out written, isFinal: true);
-                    Assert.NotEqual(OperationStatus.InvalidData, status);
-                    Assert.NotEqual(OperationStatus.NeedMoreData, status);
-                    result.Write(outBuf, 0, written);
-                    input = input.Slice(consumed);
-                }
+			// At most one window (1 MiB) plus the internal input buffer may have been taken.
+			Assert.True(consumed < 1_200_000, $"consumed {consumed} of {delta.Length}");
 
-                Assert.Equal(0, input.Length);
-                Assert.Equal(target, result.ToArray());
-            }
-        }
+			var result = new MemoryStream();
+			result.Write(outBuf, 0, written);
+			var input = delta.AsSpan(consumed);
+			while (status != OperationStatus.Done)
+			{
+				status = dec.Decode(input, outBuf, out consumed, out written, true);
+				Assert.NotEqual(OperationStatus.InvalidData, status);
+				Assert.NotEqual(OperationStatus.NeedMoreData, status);
+				result.Write(outBuf, 0, written);
+				input = input.Slice(consumed);
+			}
 
-        [Fact]
-        public void Decoder_CorruptInstruction_ReturnsInvalidData()
-        {
-            var dict = MakeDictionary(50_000, 61);
-            var target = MakeTarget(dict, 80_000, 62);
+			Assert.Equal(0, input.Length);
+			Assert.Equal(target, result.ToArray());
+		}
+	}
 
-            foreach (bool interleaved in new[] { false, true })
-            {
-                var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
-                var rnd = new Random(63);
-                var outBuf = new byte[200_000];
+	[Fact]
+	public void Decoder_CorruptInstruction_ReturnsInvalidData()
+	{
+		var dict = MakeDictionary(50_000, 61);
+		var target = MakeTarget(dict, 80_000, 62);
 
-                // Whatever is corrupted the decoder must report it (or decode something) without throwing.
-                for (int i = 0; i < 300; i++)
-                {
-                    var corrupt = (byte[])delta.Clone();
-                    corrupt[rnd.Next(5, corrupt.Length)] ^= (byte)rnd.Next(1, 256);
+		foreach (var interleaved in new[] { false, true })
+		{
+			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
+			var rnd = new Random(63);
+			var outBuf = new byte[200_000];
 
-                    using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
-                    var status = dec.Decode(corrupt, outBuf, out _, out _, isFinal: true);
-                    Assert.True(status == OperationStatus.InvalidData || status == OperationStatus.Done, status.ToString());
-                }
-            }
-        }
+			// Whatever is corrupted the decoder must report it (or decode something) without throwing.
+			for (var i = 0; i < 300; i++)
+			{
+				var corrupt = (byte[])delta.Clone();
+				corrupt[rnd.Next(5, corrupt.Length)] ^= (byte)rnd.Next(1, 256);
 
-        private sealed class TrackingMemoryManager : MemoryManager<byte>
-        {
-            private readonly byte[] data;
-            private System.Runtime.InteropServices.GCHandle handle;
+				using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
+				var status = dec.Decode(corrupt, outBuf, out _, out _, true);
+				Assert.True(status == OperationStatus.InvalidData || status == OperationStatus.Done, status.ToString());
+			}
+		}
+	}
 
-            public TrackingMemoryManager(byte[] data) => this.data = data;
+	[Fact]
+	public void Encoder_DoesNotCopyDictionary()
+	{
+		var dict = MakeDictionary(100_000, 31);
+		var target = MakeTarget(dict, 50_000, 32);
+		var owner = new TrackingMemoryManager(dict);
 
-            public int Pins { get; private set; }
+		using (var enc = new VcDiffEncoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(1, owner.Pins);
 
-            public override Span<byte> GetSpan() => data;
+		Assert.Equal(0, owner.Pins);
 
-            public override unsafe MemoryHandle Pin(int elementIndex = 0)
-            {
-                if (Pins++ == 0)
-                    handle = System.Runtime.InteropServices.GCHandle.Alloc(data, System.Runtime.InteropServices.GCHandleType.Pinned);
+		using (var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(1, owner.Pins);
 
-                return new MemoryHandle((byte*)handle.AddrOfPinnedObject() + elementIndex, default, this);
-            }
+		Assert.Equal(0, owner.Pins);
+	}
 
-            public override void Unpin()
-            {
-                if (--Pins == 0)
-                    handle.Free();
-            }
+	[Fact]
+	public void LegacyEncoder_ByteBufferDictionary_MatchesStreamDictionary()
+	{
+		var dict = MakeDictionary(300_000, 41);
+		var target = MakeTarget(dict, 400_000, 42);
 
-            protected override void Dispose(bool disposing)
-            {
-            }
-        }
-    }
+		using var buffer = new ByteBuffer(dict);
+		using var tgt = new MemoryStream(target);
+		using var delta = new MemoryStream();
+		using (var enc = new VcEncoder(buffer, tgt, delta))
+			Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+
+		Assert.Equal(LegacyEncode(dict, target, false, ChecksumFormat.None, 16), delta.ToArray());
+	}
 }

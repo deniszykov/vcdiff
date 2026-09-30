@@ -3,27 +3,25 @@
 
 using Microsoft.IO;
 
-namespace VCDiff.Shared
+namespace VCDiff.Shared;
+
+internal static class Pool
 {
-    internal static class Pool
-    {
-        const int BlockSize = RecyclableMemoryStreamManager.DefaultBlockSize;
-        
-        /// <summary>
-        /// For large buffers, multiplies the buffer linearly by this amount.
-        /// </summary>
-        const int LargeBufferMultiple = 1024 * 1024; // 1 MiB
+	private const int BLOCK_SIZE = RecyclableMemoryStreamManager.DefaultBlockSize;
 
-        /// <summary>
-        /// ~2 GiB 
-        /// </summary>
-        const int MaxBufferSize = LargeBufferMultiple * 2047;
+    /// <summary>
+    ///     For large buffers, multiplies the buffer linearly by this amount.
+    /// </summary>
+    private const int LARGE_BUFFER_MULTIPLE = 1024 * 1024; // 1 MiB
 
-        public static RecyclableMemoryStreamManager MemoryStreamManager = new RecyclableMemoryStreamManager(
-            new RecyclableMemoryStreamManager.Options(BlockSize, LargeBufferMultiple, MaxBufferSize, 0, 0)
-            {
-                AggressiveBufferReturn = true,
-                ThrowExceptionOnToArray = true
-            });
-    }
+    /// <summary>
+    ///     ~2 GiB
+    /// </summary>
+    private const int MAX_BUFFER_SIZE = LARGE_BUFFER_MULTIPLE * 2047;
+
+	public static RecyclableMemoryStreamManager MemoryStreamManager = new(
+		new RecyclableMemoryStreamManager.Options(BLOCK_SIZE, LARGE_BUFFER_MULTIPLE, MAX_BUFFER_SIZE, 0, 0) {
+			AggressiveBufferReturn = true,
+			ThrowExceptionOnToArray = true
+		});
 }

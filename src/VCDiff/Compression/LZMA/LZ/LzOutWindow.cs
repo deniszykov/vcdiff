@@ -1,316 +1,259 @@
 // Portions copyright (c) 2014 Adam Hathcock and the SharpCompress contributors.
 // Licensed under the MIT License.
 
-#nullable disable
-
 using System;
 using System.Buffers;
 using System.IO;
 
 namespace VCDiff.Compression.LZMA.LZ;
 
-internal partial class OutWindow : IDisposable
+internal class OutWindow : IDisposable
 {
-    private readonly ArrayPool<byte> _bytePool;
-    private byte[] _buffer;
-    private int _windowSize;
-    private int _pos;
-    private int _streamPos;
-    private int _pendingLen;
-    private int _pendingDist;
-    private Stream _stream;
+	private readonly ArrayPool<byte> _bytePool;
+	private int _pendingDist;
+	private int _pendingLen;
+	private Stream? _stream;
+	private int _streamPos;
 
-    private long _total;
-    private long _limit;
+	public long Total { get; private set; }
 
-    public OutWindow(ArrayPool<byte>? bytePool = null)
-    {
-        _bytePool = bytePool ?? ArrayPool<byte>.Shared;
-    }
+	// Fast-path accessors used by the local-variable LZMA decode loop (LzmaDecoder.Fast.cs).
+	internal byte[] FastBuffer { get; private set; } = null!;
+	internal int FastPos { get; set; }
+	internal long FastTotal { get => this.Total; set => this.Total = value; }
+	internal int FastWindowSize { get; private set; }
+	internal long FastLimit { get; private set; }
 
-    public long Total => _total;
+	public bool HasSpace => this.FastPos < this.FastWindowSize && this.Total < this.FastLimit;
 
-    // Fast-path accessors used by the local-variable LZMA decode loop (LzmaDecoder.Fast.cs).
-    internal byte[] FastBuffer => _buffer;
-    internal int FastPos
-    {
-        get => _pos;
-        set => _pos = value;
-    }
-    internal long FastTotal
-    {
-        get => _total;
-        set => _total = value;
-    }
-    internal int FastWindowSize => _windowSize;
-    internal long FastLimit => _limit;
+	public bool HasPending => this._pendingLen > 0;
 
-    internal void FastFlush() => Flush();
+	public int AvailableBytes => this.FastPos - this._streamPos;
 
-    internal void SetPendingFast(int distance, int len)
-    {
-        _pendingDist = distance;
-        _pendingLen = len;
-    }
+	public OutWindow(ArrayPool<byte>? bytePool = null)
+	{
+		this._bytePool = bytePool ?? ArrayPool<byte>.Shared;
+	}
 
-    public void Create(int windowSize)
-    {
-        if (windowSize <= 0)
-        {
-            throw new InvalidFormatException($"LZMA: invalid dictionary size {windowSize}");
-        }
-        if (_windowSize != windowSize)
-        {
-            if (_buffer is not null)
-            {
-                _bytePool.Return(_buffer);
-            }
-            _buffer = _bytePool.Rent(windowSize);
-        }
-        _buffer[windowSize - 1] = 0;
-        _windowSize = windowSize;
-        _pos = 0;
-        _streamPos = 0;
-        _pendingLen = 0;
-        _total = 0;
-        _limit = 0;
-    }
+	internal void FastFlush()
+	{
+		this.Flush();
+	}
 
-    public void Dispose()
-    {
-        ReleaseStream();
-        if (_buffer is null)
-        {
-            return;
-        }
-        _bytePool.Return(_buffer);
-        _buffer = null;
-    }
+	internal void SetPendingFast(int distance, int len)
+	{
+		this._pendingDist = distance;
+		this._pendingLen = len;
+	}
 
-    public void Reset()
-    {
-        ReleaseStream();
-        Create(_windowSize);
-    }
+	public void Create(int windowSize)
+	{
+		if (windowSize <= 0) throw new InvalidFormatException($"LZMA: invalid dictionary size {windowSize}");
 
-    public void Init(Stream stream)
-    {
-        ReleaseStream();
-        _stream = stream;
-    }
+		if (this.FastWindowSize != windowSize)
+		{
+			if (this.FastBuffer is not null) this._bytePool.Return(this.FastBuffer);
 
-    public void Train(Stream stream)
-    {
-        var len = stream.Length;
-        var size = (len < _windowSize) ? (int)len : _windowSize;
-        stream.Position = len - size;
-        _total = 0;
-        _limit = size;
-        _pos = _windowSize - size;
-        CopyStream(stream, size);
-        if (_pos == _windowSize)
-        {
-            _pos = 0;
-        }
-        _streamPos = _pos;
-    }
+			this.FastBuffer = this._bytePool.Rent(windowSize);
+		}
 
-    public void ReleaseStream()
-    {
-        Flush();
-        _stream = null;
-    }
+		this.FastBuffer[windowSize - 1] = 0;
+		this.FastWindowSize = windowSize;
+		this.FastPos = 0;
+		this._streamPos = 0;
+		this._pendingLen = 0;
+		this.Total = 0;
+		this.FastLimit = 0;
+	}
 
-    private void Flush()
-    {
-        if (_stream is null)
-        {
-            return;
-        }
-        var size = _pos - _streamPos;
-        if (size == 0)
-        {
-            return;
-        }
-        _stream.Write(_buffer, _streamPos, size);
-        if (_pos >= _windowSize)
-        {
-            _pos = 0;
-        }
-        _streamPos = _pos;
-    }
+	public void Reset()
+	{
+		this.ReleaseStream();
+		this.Create(this.FastWindowSize);
+	}
 
-    public void CopyPending()
-    {
-        if (_pendingLen < 1)
-        {
-            return;
-        }
-        var rem = _pendingLen;
-        var pos = (_pendingDist < _pos ? _pos : _pos + _windowSize) - _pendingDist - 1;
-        while (rem > 0 && HasSpace)
-        {
-            if (pos >= _windowSize)
-            {
-                pos = 0;
-            }
-            PutByte(_buffer[pos++]);
-            rem--;
-        }
-        _pendingLen = rem;
-    }
+	public void Init(Stream stream)
+	{
+		this.ReleaseStream();
+		this._stream = stream;
+	}
 
-    public void CopyBlock(int distance, int len)
-    {
-        var rem = len;
-        var pos = (distance < _pos ? _pos : _pos + _windowSize) - distance - 1;
-        var targetSize = HasSpace ? (int)Math.Min(rem, _limit - _total) : 0;
-        var sizeUntilWindowEnd = Math.Min(_windowSize - _pos, _windowSize - pos);
-        var sizeUntilOverlap = Math.Abs(pos - _pos);
-        var fastSize = Math.Min(Math.Min(sizeUntilWindowEnd, sizeUntilOverlap), targetSize);
-        if (fastSize >= 2)
-        {
-            _buffer.AsSpan(pos, fastSize).CopyTo(_buffer.AsSpan(_pos, fastSize));
-            _pos += fastSize;
-            pos += fastSize;
-            _total += fastSize;
-            if (_pos >= _windowSize)
-            {
-                Flush();
-            }
-            rem -= fastSize;
-        }
-        while (rem > 0 && HasSpace)
-        {
-            if (pos >= _windowSize)
-            {
-                pos = 0;
-            }
-            PutByte(_buffer[pos++]);
-            rem--;
-        }
-        _pendingLen = rem;
-        _pendingDist = distance;
-    }
+	public void Train(Stream stream)
+	{
+		var len = stream.Length;
+		var size = len < this.FastWindowSize ? (int)len : this.FastWindowSize;
+		stream.Position = len - size;
+		this.Total = 0;
+		this.FastLimit = size;
+		this.FastPos = this.FastWindowSize - size;
+		this.CopyStream(stream, size);
+		if (this.FastPos == this.FastWindowSize) this.FastPos = 0;
 
-    public void PutByte(byte b)
-    {
-        _buffer[_pos++] = b;
-        _total++;
-        if (_pos >= _windowSize)
-        {
-            Flush();
-        }
-    }
+		this._streamPos = this.FastPos;
+	}
 
-    public byte GetByte(int distance)
-    {
-        var pos = _pos - distance - 1;
-        if (pos < 0)
-        {
-            pos += _windowSize;
-        }
-        return _buffer[pos];
-    }
+	public void ReleaseStream()
+	{
+		this.Flush();
+		this._stream = null;
+	}
 
-    public int CopyStream(Stream stream, int len)
-    {
-        var size = len;
-        while (size > 0 && _pos < _windowSize && _total < _limit)
-        {
-            var curSize = _windowSize - _pos;
-            if (curSize > _limit - _total)
-            {
-                curSize = (int)(_limit - _total);
-            }
-            if (curSize > size)
-            {
-                curSize = size;
-            }
-            var numReadBytes = stream.Read(_buffer, _pos, curSize);
-            if (numReadBytes == 0)
-            {
-                throw new DataErrorException();
-            }
-            size -= numReadBytes;
-            _pos += numReadBytes;
-            _total += numReadBytes;
-            if (_pos >= _windowSize)
-            {
-                Flush();
-            }
-        }
-        return len - size;
-    }
+	private void Flush()
+	{
+		if (this._stream is null) return;
 
-    public void SetLimit(long size) => _limit = _total + size;
+		var size = this.FastPos - this._streamPos;
+		if (size == 0) return;
 
-    public bool HasSpace => _pos < _windowSize && _total < _limit;
+		this._stream.Write(this.FastBuffer, this._streamPos, size);
+		if (this.FastPos >= this.FastWindowSize) this.FastPos = 0;
 
-    public bool HasPending => _pendingLen > 0;
+		this._streamPos = this.FastPos;
+	}
 
-    public int Read(byte[] buffer, int offset, int count)
-    {
-        if (_streamPos >= _pos)
-        {
-            return 0;
-        }
+	public void CopyPending()
+	{
+		if (this._pendingLen < 1) return;
 
-        var size = _pos - _streamPos;
-        if (size > count)
-        {
-            size = count;
-        }
-        Buffer.BlockCopy(_buffer, _streamPos, buffer, offset, size);
-        _streamPos += size;
-        if (_streamPos >= _windowSize)
-        {
-            _pos = 0;
-            _streamPos = 0;
-        }
-        return size;
-    }
+		var rem = this._pendingLen;
+		var pos = (this._pendingDist < this.FastPos ? this.FastPos : this.FastPos + this.FastWindowSize) - this._pendingDist - 1;
+		while (rem > 0 && this.HasSpace)
+		{
+			if (pos >= this.FastWindowSize) pos = 0;
 
-    public int Read(Memory<byte> buffer, int offset, int count)
-    {
-        if (_streamPos >= _pos)
-        {
-            return 0;
-        }
+			this.PutByte(this.FastBuffer[pos++]);
+			rem--;
+		}
 
-        var size = _pos - _streamPos;
-        if (size > count)
-        {
-            size = count;
-        }
-        _buffer.AsMemory(_streamPos, size).CopyTo(buffer.Slice(offset, size));
-        _streamPos += size;
-        if (_streamPos >= _windowSize)
-        {
-            _pos = 0;
-            _streamPos = 0;
-        }
-        return size;
-    }
+		this._pendingLen = rem;
+	}
 
-    public int ReadByte()
-    {
-        if (_streamPos >= _pos)
-        {
-            return -1;
-        }
+	public void CopyBlock(int distance, int len)
+	{
+		var rem = len;
+		var pos = (distance < this.FastPos ? this.FastPos : this.FastPos + this.FastWindowSize) - distance - 1;
+		var targetSize = this.HasSpace ? (int)Math.Min(rem, this.FastLimit - this.Total) : 0;
+		var sizeUntilWindowEnd = Math.Min(this.FastWindowSize - this.FastPos, this.FastWindowSize - pos);
+		var sizeUntilOverlap = Math.Abs(pos - this.FastPos);
+		var fastSize = Math.Min(Math.Min(sizeUntilWindowEnd, sizeUntilOverlap), targetSize);
+		if (fastSize >= 2)
+		{
+			this.FastBuffer.AsSpan(pos, fastSize).CopyTo(this.FastBuffer.AsSpan(this.FastPos, fastSize));
+			this.FastPos += fastSize;
+			pos += fastSize;
+			this.Total += fastSize;
+			if (this.FastPos >= this.FastWindowSize) this.Flush();
+			rem -= fastSize;
+		}
 
-        int value = _buffer[_streamPos];
+		while (rem > 0 && this.HasSpace)
+		{
+			if (pos >= this.FastWindowSize) pos = 0;
 
-        _streamPos++;
-        if (_streamPos >= _windowSize)
-        {
-            _pos = 0;
-            _streamPos = 0;
-        }
+			this.PutByte(this.FastBuffer[pos++]);
+			rem--;
+		}
 
-        return value;
-    }
+		this._pendingLen = rem;
+		this._pendingDist = distance;
+	}
 
-    public int AvailableBytes => _pos - _streamPos;
+	public void PutByte(byte b)
+	{
+		this.FastBuffer[this.FastPos++] = b;
+		this.Total++;
+		if (this.FastPos >= this.FastWindowSize) this.Flush();
+	}
+
+	public byte GetByte(int distance)
+	{
+		var pos = this.FastPos - distance - 1;
+		if (pos < 0) pos += this.FastWindowSize;
+		return this.FastBuffer[pos];
+	}
+
+	public int CopyStream(Stream stream, int len)
+	{
+		var size = len;
+		while (size > 0 && this.FastPos < this.FastWindowSize && this.Total < this.FastLimit)
+		{
+			var curSize = this.FastWindowSize - this.FastPos;
+			if (curSize > this.FastLimit - this.Total) curSize = (int)(this.FastLimit - this.Total);
+			if (curSize > size) curSize = size;
+			var numReadBytes = stream.Read(this.FastBuffer, this.FastPos, curSize);
+			if (numReadBytes == 0) throw new DataErrorException();
+
+			size -= numReadBytes;
+			this.FastPos += numReadBytes;
+			this.Total += numReadBytes;
+			if (this.FastPos >= this.FastWindowSize) this.Flush();
+		}
+
+		return len - size;
+	}
+
+	public void SetLimit(long size)
+	{
+		this.FastLimit = this.Total + size;
+	}
+
+	public int Read(byte[] buffer, int offset, int count)
+	{
+		if (this._streamPos >= this.FastPos) return 0;
+
+		var size = this.FastPos - this._streamPos;
+		if (size > count) size = count;
+		Buffer.BlockCopy(this.FastBuffer, this._streamPos, buffer, offset, size);
+		this._streamPos += size;
+		if (this._streamPos >= this.FastWindowSize)
+		{
+			this.FastPos = 0;
+			this._streamPos = 0;
+		}
+
+		return size;
+	}
+
+	public int Read(Memory<byte> buffer, int offset, int count)
+	{
+		if (this._streamPos >= this.FastPos) return 0;
+
+		var size = this.FastPos - this._streamPos;
+		if (size > count) size = count;
+
+		this.FastBuffer.AsMemory(this._streamPos, size).CopyTo(buffer.Slice(offset, size));
+		this._streamPos += size;
+		if (this._streamPos >= this.FastWindowSize)
+		{
+			this.FastPos = 0;
+			this._streamPos = 0;
+		}
+
+		return size;
+	}
+
+	public int ReadByte()
+	{
+		if (this._streamPos >= this.FastPos) return -1;
+
+		int value = this.FastBuffer[this._streamPos];
+
+		this._streamPos++;
+		if (this._streamPos >= this.FastWindowSize)
+		{
+			this.FastPos = 0;
+			this._streamPos = 0;
+		}
+
+		return value;
+	}
+
+	public void Dispose()
+	{
+		this.ReleaseStream();
+		if (this.FastBuffer is null) return;
+
+		this._bytePool.Return(this.FastBuffer);
+		this.FastBuffer = null!;
+	}
 }

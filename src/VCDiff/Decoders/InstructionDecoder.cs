@@ -1,96 +1,93 @@
-// Copyright (c) Metric and the Snowflake Authors.
+﻿// Copyright (c) Metric and the Snowflake Authors.
 // Licensed under the Apache License, Version 2.0.
 
 using VCDiff.Includes;
 using VCDiff.Shared;
 
-namespace VCDiff.Decoders
+namespace VCDiff.Decoders;
+
+internal class InstructionDecoder
 {
-    internal class InstructionDecoder
-    {
-        private CodeTable table;
-        private ByteBuffer source;
-        private int pendingSecond;
+	private readonly ByteBuffer source;
+	private readonly CodeTable table;
+	private int pendingSecond;
 
-        /// <summary>
-        /// Decodes the incoming instruction from the buffer
-        /// </summary>
-        /// <param name="sin">the instruction buffer</param>
-        /// <param name="customTable">custom code table if any. Default is null.</param>
-        public InstructionDecoder(ByteBuffer sin, CustomCodeTableDecoder? customTable = null)
-        {
-            table = customTable?.CustomTable ?? CodeTable.DefaultTable;
-            source = sin;
-            pendingSecond = CodeTable.kNoOpcode;
-        }
+    /// <summary>
+    ///     Decodes the incoming instruction from the buffer
+    /// </summary>
+    /// <param name="sin">the instruction buffer</param>
+    /// <param name="customTable">custom code table if any. Default is null.</param>
+    public InstructionDecoder(ByteBuffer sin, CustomCodeTableDecoder? customTable = null)
+	{
+		this.table = customTable?.CustomTable ?? CodeTable.DefaultTable;
+		this.source = sin;
+		this.pendingSecond = CodeTable.KNoOpcode;
+	}
 
-        /// <summary>
-        /// Gets the next instruction from the buffer
-        /// </summary>
-        /// <param name="size">the size</param>
-        /// <param name="mode">the mode</param>
-        /// <returns></returns>
-        public unsafe VCDiffInstructionType Next(out int size, out byte mode)
-        {
-            byte opcode = 0;
-            byte instructionType = CodeTable.N;
-            int instructionSize = 0;
-            byte instructionMode = 0;
-            long start = source.Position;
-            do
-            {
-                if (pendingSecond != CodeTable.kNoOpcode)
-                {
-                    opcode = (byte)pendingSecond;
-                    pendingSecond = CodeTable.kNoOpcode;
-                    instructionType = table.inst2.Pointer[opcode];
-                    instructionSize = table.size2.Pointer[opcode];
-                    instructionMode = table.mode2.Pointer[opcode];
-                    break;
-                }
+    /// <summary>
+    ///     Gets the next instruction from the buffer
+    /// </summary>
+    /// <param name="size">the size</param>
+    /// <param name="mode">the mode</param>
+    /// <returns></returns>
+    public unsafe VcDiffInstructionType Next(out int size, out byte mode)
+	{
+		byte opcode = 0;
+		var instructionType = CodeTable.N;
+		var instructionSize = 0;
+		byte instructionMode = 0;
+		var start = this.source.Position;
+		do
+		{
+			if (this.pendingSecond != CodeTable.KNoOpcode)
+			{
+				opcode = (byte)this.pendingSecond;
+				this.pendingSecond = CodeTable.KNoOpcode;
+				instructionType = this.table.Inst2.Pointer[opcode];
+				instructionSize = this.table.Size2.Pointer[opcode];
+				instructionMode = this.table.Mode2.Pointer[opcode];
+				break;
+			}
 
-                if (!source.CanRead)
-                {
-                    size = 0;
-                    mode = 0;
-                    return VCDiffInstructionType.EOD;
-                }
+			if (!this.source.CanRead)
+			{
+				size = 0;
+				mode = 0;
+				return VcDiffInstructionType.EOD;
+			}
 
-                opcode = source.PeekByte();
-                if (table.inst2.Pointer[opcode] != CodeTable.N)
-                {
-                    pendingSecond = source.PeekByte();
-                }
-                source.Next();
-                instructionType = table.inst1.Pointer[opcode];
-                instructionSize = table.size1.Pointer[opcode];
-                instructionMode = table.mode1.Pointer[opcode];
-            } while (instructionType == CodeTable.N);
+			opcode = this.source.PeekByte();
+			if (this.table.Inst2.Pointer[opcode] != CodeTable.N) this.pendingSecond = this.source.PeekByte();
 
-            if (instructionSize == 0)
-            {
-                switch (size = VarIntBE.ParseInt32(source))
-                {
-                    case (int)VCDiffResult.ERROR:
-                        mode = 0;
-                        size = 0;
-                        return VCDiffInstructionType.ERROR;
+			this.source.Next();
+			instructionType = this.table.Inst1.Pointer[opcode];
+			instructionSize = this.table.Size1.Pointer[opcode];
+			instructionMode = this.table.Mode1.Pointer[opcode];
+		} while (instructionType == CodeTable.N);
 
-                    case (int)VCDiffResult.EOD:
-                        mode = 0;
-                        size = 0;
-                        //reset it back before we read the instruction
-                        //otherwise when parsing interleave we will miss data
-                        source.Position = start;
-                        return VCDiffInstructionType.EOD;
-                }
-            }
-            else
-            {
-                size = instructionSize;
-            }
-            mode = instructionMode;
-            return (VCDiffInstructionType)instructionType;
-        }
-    }
+		if (instructionSize == 0)
+		{
+			switch (size = VarIntBe.ParseInt32(this.source))
+			{
+				case (int)VcDiffResult.ERROR:
+					mode = 0;
+					size = 0;
+					return VcDiffInstructionType.ERROR;
+
+				case (int)VcDiffResult.EOD:
+					mode = 0;
+					size = 0;
+
+					//reset it back before we read the instruction
+					//otherwise when parsing interleave we will miss data
+					this.source.Position = start;
+					return VcDiffInstructionType.EOD;
+			}
+		}
+		else
+			size = instructionSize;
+
+		mode = instructionMode;
+		return (VcDiffInstructionType)instructionType;
+	}
 }

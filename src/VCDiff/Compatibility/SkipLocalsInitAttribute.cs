@@ -7,6 +7,7 @@
 // skips zero-initialization of locals in the attributed method. Defining it
 // here lets the netcoreapp3.1 target use the attribute and keep the same
 // skip-init code generation as the newer targets.
+
 #if !NET5_0_OR_GREATER
 namespace System.Runtime.CompilerServices
 {
