@@ -29,6 +29,13 @@ This fork keeps the fast SIMD/unsafe encode and decode paths from upstream while
 - **Target frameworks**: `net6.0` and `net10.0` only (the `netstandard2.0` and `netstandard2.1` targets were removed).
 - **Dependencies**: only `Microsoft.IO.RecyclableMemoryStream`. The `SharpCompress` package and its transitive dependencies, as well as `Newtonsoft.Json`, `System.Text.RegularExpressions`, `PolyShim`, and `System.Runtime.CompilerServices.Unsafe`, were removed.
 - **Smaller build**: instead of depending on the whole `SharpCompress` package, only a minimal XZ/LZMA2 *decompressor* is vendored into the library (decode-only, LZMA2 filter, using the unsafe/SIMD fast decode loop). This supports the xdelta secondary-compression path and drops all of SharpCompress's archive readers/writers and unrelated compressors.
+
+  | | `VCDiff.dll` net6.0 | `VCDiff.dll` net10.0 | total deployed |
+  |---|---|---|---|
+  | v5.0.0 (NuGet) | 71 KiB | 62 KiB | ~2.1 MiB (incl. ~2.0 MiB `SharpCompress.dll`) |
+  | this fork | 105 KiB | 104 KiB | ~105 KiB |
+
+  `VCDiff.dll` itself grows slightly because it now embeds the LZMA2 decoder, but the fork no longer pulls in SharpCompress's ~2.0 MiB `SharpCompress.dll`, so the deployed footprint drops by roughly 95%.
 - **Configurable buffer pooling**: `VcEncoderOptions` and `VcDecoderOptions` accept an `ArrayPool<byte>` (defaulting to `ArrayPool<byte>.Shared` when `null`) that is used for every internal `byte[]`/pinned buffer during encoding and decoding.
 
 ### Using the options classes
