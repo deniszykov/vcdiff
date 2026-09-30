@@ -133,7 +133,11 @@ namespace VCDiff.Shared
             if (len <= CACHE_SIZE)
                 return cache;
 
+#if NET5_0_OR_GREATER
             return GC.AllocateUninitializedArray<byte>(len);
+#else
+            return new byte[len];
+#endif
         }
     }
 }

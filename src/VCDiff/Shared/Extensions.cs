@@ -9,12 +9,12 @@ namespace VCDiff.Shared
     {
         public static Span<byte> AsSpanFast(this byte[] data)
         {
-            return MemoryMarshal.CreateSpan(ref MemoryMarshal.GetArrayDataReference(data), data.Length);
+            return MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(data.AsSpan()), data.Length);
         }
 
         public static Span<byte> AsSpanFast(this byte[] data, int length)
         {
-            return MemoryMarshal.CreateSpan(ref MemoryMarshal.GetArrayDataReference(data), length);
+            return MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(data.AsSpan()), length);
         }
 
     }
