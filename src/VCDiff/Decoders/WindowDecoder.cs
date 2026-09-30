@@ -1,5 +1,5 @@
-﻿using SharpCompress.Compressors.Xz;
 using System;
+using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using VCDiff.Compressors;
@@ -39,6 +39,7 @@ namespace VCDiff.Decoders
         private bool addressForCopyCompressed;
         private uint checksum;
         private readonly ICompressor? secondaryCompressor;
+        private readonly ArrayPool<byte> _bytePool;
 
         public PinnedArrayRental AddRunData;
 
@@ -79,11 +80,12 @@ namespace VCDiff.Decoders
         /// <param name="buffer">the buffer containing the incoming data</param>
         /// <param name="maxWindowSize">The maximum target window size in bytes</param>
         /// <param name="secondaryCompressor">The secondary compressor that can decompress window sections, if applicable.</param>
-        public WindowDecoder(long dictionarySize, TByteBuffer buffer, ICompressor? secondaryCompressor, int maxWindowSize = DefaultMaxTargetFileSize)
+        public WindowDecoder(long dictionarySize, TByteBuffer buffer, ICompressor? secondaryCompressor, int maxWindowSize = DefaultMaxTargetFileSize, ArrayPool<byte>? bytePool = null)
         {
             this.dictionarySize = dictionarySize;
             this.buffer = buffer;
             this.secondaryCompressor = secondaryCompressor;
+            _bytePool = bytePool ?? ArrayPool<byte>.Shared;
             chunk = new ParseableChunk(buffer.Position, buffer.Length);
 
             if (maxWindowSize < 0)
@@ -141,7 +143,7 @@ namespace VCDiff.Decoders
             // Note: Copied required here due to caching behaviour.
             if (buffer.CanRead)
             {
-                AddRunData = new PinnedArrayRental((int)addRunLength);
+                AddRunData = new PinnedArrayRental((int)addRunLength, _bytePool);
                 Debug.Assert(addRunLength <= int.MaxValue);
                 buffer.ReadBytesToSpan(AddRunData.AsSpan());
                 if (AddRunCompressed && secondaryCompressorId != 0)
@@ -156,7 +158,7 @@ namespace VCDiff.Decoders
             }
             if (buffer.CanRead)
             {
-                InstructionsAndSizesData = new PinnedArrayRental((int)instructionAndSizesLength);
+                InstructionsAndSizesData = new PinnedArrayRental((int)instructionAndSizesLength, _bytePool);
                 Debug.Assert(instructionAndSizesLength <= int.MaxValue);
                 buffer.ReadBytesToSpan(InstructionsAndSizesData.AsSpan());
                 if (instructionsAndSizesCompressed && secondaryCompressorId != 0)
@@ -171,7 +173,7 @@ namespace VCDiff.Decoders
             }
             if (buffer.CanRead)
             {
-                AddressesForCopyData = new PinnedArrayRental((int)addressForCopyLength);
+                AddressesForCopyData = new PinnedArrayRental((int)addressForCopyLength, _bytePool);
                 Debug.Assert(addressForCopyLength <= int.MaxValue);
                 buffer.ReadBytesToSpan(AddressesForCopyData.AsSpan());
                 if (addressForCopyCompressed && secondaryCompressorId != 0)

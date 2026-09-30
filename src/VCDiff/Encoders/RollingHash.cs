@@ -1,12 +1,9 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-#endif
 namespace VCDiff.Encoders
 {
     /// <summary>
@@ -24,14 +21,12 @@ namespace VCDiff.Encoders
         private unsafe int* kMultFactorsPtr;
         private ulong multiplier;
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         private const byte S23O1 = (((2) << 6) | ((3) << 4) | ((0) << 2) | ((1)));
         private const byte S1O32 = (((1) << 6) | ((0) << 4) | ((3) << 2) | ((2)));
         private const byte SO123 = (((0) << 6) | ((1) << 4) | ((2) << 2) | ((3)));
         private const byte SOO2O = (((0) << 6) | ((0) << 4) | ((2) << 2) | ((0)));
 
         private readonly Vector256<int> v_shuf;
-#endif
         /// <summary>
         /// Manually creates a rolling hash instance for use with a <see cref="VcEncoder"/>.
         /// This object must be disposed because it allocates pinned memory that will never be garbage collected
@@ -41,9 +36,7 @@ namespace VCDiff.Encoders
         public RollingHash(int size)
         {
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             v_shuf = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
-#endif
             this.WindowSize = size;
             removeTable = new ulong[256];
             kMultFactors = new int[size];
@@ -76,7 +69,6 @@ namespace VCDiff.Encoders
         /// </summary>
         public int WindowSize { get; }
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe ulong HashAvx2(byte* buf, int len)
         {
@@ -166,7 +158,6 @@ namespace VCDiff.Encoders
 
             return h & (kBase - 1);
         }
-#endif
         /// <summary>
         /// Generate a new hash from the bytes
         /// 
@@ -182,11 +173,7 @@ namespace VCDiff.Encoders
         /// The final result is then MODded using binary and with kBase.
         /// 
         /// </summary>
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         internal unsafe ulong Hash(byte* buf, int len)
         {
 
@@ -194,11 +181,8 @@ namespace VCDiff.Encoders
             if (len == 1) return buf[0] * (uint)kMult;
 
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
-
             if (Avx2.IsSupported && len >= 8) return HashAvx2(buf, len);
             if (Sse41.IsSupported && len >= 4) return HashSse(buf, len);
-#endif
             ulong h = 0;
 
             //// Old Version 
@@ -230,9 +214,7 @@ namespace VCDiff.Encoders
         /// <param name="firstByte">the original byte of the data for the first hash</param>
         /// <param name="newByte">the first byte of the new data to hash</param>
         /// <returns></returns>
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ulong UpdateHash(ulong oldHash, byte firstByte, byte newByte)
         {

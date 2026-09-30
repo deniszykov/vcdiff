@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.IO;
 using System.Threading.Tasks;
 using VCDiff.Compressors;
@@ -22,12 +23,24 @@ namespace VCDiff.Decoders
         /// <param name="source">The dictionary stream, or the base file.</param>
         /// <param name="delta">The stream containing the VCDIFF delta.</param>
         /// <param name="outputStream">The stream to write the output in.</param>
+        /// <param name="options">The decoder options. See <see cref="VcDecoderOptions"/>.</param>
+        public VcDecoder(Stream source, Stream delta, Stream outputStream, VcDecoderOptions options)
+            : base(new ByteStreamReader(source, options.BytePool), new ByteStreamReader(delta, options.BytePool), outputStream, options)
+        {
+            _ownsSources = true;
+        }
+
+        /// <summary>
+        /// Creates a new VCDIFF decoder.
+        /// </summary>
+        /// <param name="source">The dictionary stream, or the base file.</param>
+        /// <param name="delta">The stream containing the VCDIFF delta.</param>
+        /// <param name="outputStream">The stream to write the output in.</param>
         /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
         /// <param name="disableChecksums">Whether to disable checksums when applying the delta. This can be dangerous, but can be useful when the input file differs in ways that the delta does not reference.</param>
         public VcDecoder(Stream source, Stream delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DefaultMaxTargetFileSize, bool disableChecksums = false)
-            : base(new ByteStreamReader(source), new ByteStreamReader(delta), outputStream, maxTargetFileSize, disableChecksums)
+            : this(source, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
         {
-            _ownsSources = true;
         }
 
         /// <inheritdoc />
@@ -59,6 +72,7 @@ namespace VCDiff.Decoders
         protected int maxTargetFileSize;
         protected bool disableChecksums;
         private CustomCodeTableDecoder? customTable;
+        private readonly ArrayPool<byte> _bytePool;
         protected static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4, 0x00, 0x00 };
 
         /// <summary>
@@ -79,16 +93,29 @@ namespace VCDiff.Decoders
         /// <param name="dict">The dictionary stream, or the base file.</param>
         /// <param name="delta">The stream containing the VCDIFF delta.</param>
         /// <param name="outputStream">The stream to write the output in.</param>
-        /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
-        /// <param name="disableChecksums">Whether to disable checksums when applying the delta. This can be dangerous, but can be useful when the input file differs in ways that the delta does not reference.</param>
-        public VcDecoderEx(TSourceBuffer dict, TDeltaBuffer delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DefaultMaxTargetFileSize, bool disableChecksums = false)
+        /// <param name="options">The decoder options. See <see cref="VcDecoderOptions"/>.</param>
+        public VcDecoderEx(TSourceBuffer dict, TDeltaBuffer delta, Stream outputStream, VcDecoderOptions options)
         {
             this.delta  = delta;
             this.source = dict;
             this.outputStream = outputStream;
-            this.maxTargetFileSize = maxTargetFileSize;
-            this.disableChecksums = disableChecksums;
+            this.maxTargetFileSize = options.MaxTargetFileSize;
+            this.disableChecksums = options.DisableChecksums;
+            this._bytePool = options.BytePoolOrDefault;
             this.IsInitialized = false;
+        }
+
+        /// <summary>
+        /// Creates a new VCDIFF decoder.
+        /// </summary>
+        /// <param name="dict">The dictionary stream, or the base file.</param>
+        /// <param name="delta">The stream containing the VCDIFF delta.</param>
+        /// <param name="outputStream">The stream to write the output in.</param>
+        /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
+        /// <param name="disableChecksums">Whether to disable checksums when applying the delta. This can be dangerous, but can be useful when the input file differs in ways that the delta does not reference.</param>
+        public VcDecoderEx(TSourceBuffer dict, TDeltaBuffer delta, Stream outputStream, int maxTargetFileSize = WindowDecoderBase.DefaultMaxTargetFileSize, bool disableChecksums = false)
+            : this(dict, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
+        {
         }
 
         /// <summary>
@@ -196,7 +223,7 @@ namespace VCDiff.Decoders
                 while (delta.CanRead)
                 {
                     //delta is streamed in order aka not random access
-                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize);
+                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize, _bytePool);
 
                     if (!w.Decode(this.IsSDCHFormat, this.SecondaryCompressorId))
                     {
@@ -266,7 +293,7 @@ namespace VCDiff.Decoders
                 while (delta.CanRead)
                 {
                     //delta is streamed in order aka not random access
-                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize);
+                    using var w = new WindowDecoder<TDeltaBuffer>(source.Length, delta, secondaryCompressor, maxTargetFileSize, _bytePool);
 
                     if (w.Decode(this.IsSDCHFormat, this.SecondaryCompressorId))
                     {
@@ -351,7 +378,7 @@ namespace VCDiff.Decoders
             {
                 0 => null,
                 // xdelta defines 1 to be "DJW static huffman"
-                2 => new XzCompressor(),
+                2 => new XzCompressor(_bytePool),
                 // xdelta defines 16 to be "FGK adaptive huffman" but says it's non-standard
                 _ => throw new NotSupportedException($"Secondary compression id '{secondaryCompressorId}' is not supported.")
             };

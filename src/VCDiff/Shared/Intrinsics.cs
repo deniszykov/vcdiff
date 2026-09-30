@@ -1,11 +1,9 @@
-﻿using System;
+using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-#endif
 
 namespace VCDiff.Shared
 {
@@ -18,7 +16,6 @@ namespace VCDiff.Shared
 
         static Intrinsics()
         {
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             if (Sse2.IsSupported)
             {
                 MaxRegisterSize = SseRegisterSize;
@@ -37,12 +34,10 @@ namespace VCDiff.Shared
                 // bytesLeft will never exceed.
                 MaxRegisterSize = int.MaxValue;
             }
-#endif
         }
 
         public static unsafe void FillArrayVectorized(long* first, int numValues, long value)
         {
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             long bytesLeft = (long)((long)numValues * sizeof(long));
             if (bytesLeft >= MaxRegisterSize)
             {
@@ -63,14 +58,9 @@ namespace VCDiff.Shared
                 for (int x = 0; x < numValues; x++)
                     first[x] = value;
             }
-#else
-            // Accelerate via loop unrolled solution.
-            new Span<long>((void*)first, numValues).Fill(value);
-#endif
         }
 
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private static unsafe void Sse2FillArray(long* first, long value, ref long bytesLeft)
         {
@@ -113,6 +103,5 @@ namespace VCDiff.Shared
                 values += 1;
             }
         }
-#endif
     }
 }

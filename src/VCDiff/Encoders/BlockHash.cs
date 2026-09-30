@@ -2,11 +2,8 @@ using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using VCDiff.Shared;
-
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-#endif
 namespace VCDiff.Encoders
 {
     internal class BlockHash : IDisposable
@@ -172,12 +169,8 @@ namespace VCDiff.Encoders
         /// <param name="targetPtr">pointer to the target buffer</param>
         /// <param name="target">the target buffer</param>
         /// <param name="m">the match object to use</param>
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-#endif
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         public unsafe void FindBestMatch(ulong hash, long candidateStart, long targetStart, long targetSize, byte* targetPtr, ByteBuffer target, ref Match m)
         {
             int matchCounter = 0;
@@ -250,9 +243,7 @@ namespace VCDiff.Encoders
             AddAllBlocksThroughIndex(source.Length);
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe bool BlockContentsMatch(long block1, long tOffset, byte *sourcePtr, byte *targetPtr, ByteBuffer target)
         {
@@ -266,7 +257,6 @@ namespace VCDiff.Encoders
             if (sOffset > sLen || tOffset > tLen)
                 return false;
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             if (Avx2.IsSupported && lengthToExamine >= Intrinsics.AvxRegisterSize)
             {
                 if (sOffset >= Intrinsics.AvxRegisterSize && tOffset >= Intrinsics.AvxRegisterSize)
@@ -302,30 +292,6 @@ namespace VCDiff.Encoders
                     }
                 }
             }
-#elif NETSTANDARD2_1
-            int vectorSize = Vector<byte>.Count;
-            if (lengthToExamine >= vectorSize)
-            {
-                var sBuf = source.AsSpan();
-                var tBuf = target.AsSpan();
-                
-                if (sOffset >= vectorSize && tOffset >= vectorSize)
-                {
-                    while (lengthToExamine >= vectorSize)
-                    {
-                        Vector<byte> lv = new Vector<byte>(sBuf.Slice(sOffset));
-                        Vector<byte> rv = new Vector<byte>(tBuf.Slice((int)tOffset));
-                        if (!Vector.EqualsAll(lv, rv))
-                            return false;
-
-                        sOffset += vectorSize;
-                        tOffset += vectorSize;
-                        lengthToExamine -= vectorSize;
-                    }
-                }
-            }
-#endif
-
             while (lengthToExamine > 0 && !(sOffset > sLen || tOffset > tLen))
             {
                 if (sPtr[sOffset] != tPtr[tOffset]) 
@@ -357,12 +323,8 @@ namespace VCDiff.Encoders
             return SkipNonMatchingBlocks(nextBlockTable.Pointer[blockNumber], toffset, sourcePtr, targetPtr, target);
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         [SkipLocalsInit]
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         private unsafe long SkipNonMatchingBlocks(long blockNumber, long toffset, byte* sourcePtr, byte* targetPtr, ByteBuffer target)
         {
             int probes = 0;
@@ -378,7 +340,6 @@ namespace VCDiff.Encoders
             return blockNumber;
         }
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe long MatchingBytesToLeftAvx2(long start, long tstart, byte* sourcePtr, byte* targetPtr, long maxBytes)
         {
@@ -468,18 +429,13 @@ namespace VCDiff.Encoders
 
             return bytesFound;
         }
-#endif
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe long MatchingBytesToLeft(long start, long tstart, byte* sourcePtr, byte* targetPtr, ByteBuffer target, long maxBytes)
         {
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             if (Avx2.IsSupported) return MatchingBytesToLeftAvx2(start, tstart, sourcePtr, targetPtr, maxBytes);
             if (Sse2.IsSupported) return MatchingBytesToLeftSse2(start, tstart, sourcePtr, targetPtr, maxBytes);
-#endif
             long bytesFound = 0;
             long sindex = start;
             long tindex = tstart;
@@ -490,7 +446,6 @@ namespace VCDiff.Encoders
             var tBuf = target.AsSpan();
             var sBuf = source.AsSpan();
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER || NETSTANDARD2_1_OR_GREATER
             while (sindex >= vectorSize && tindex >= vectorSize && bytesFound <= maxBytes - vectorSize)
             {
                 tindex -= vectorSize;
@@ -506,7 +461,6 @@ namespace VCDiff.Encoders
 
                 bytesFound += vectorSize;
             }
-#endif
 
             while (bytesFound < maxBytes)
             {
@@ -523,7 +477,6 @@ namespace VCDiff.Encoders
             return bytesFound;
         }
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe long MatchingBytesToRightAvx2(long end, long tstart, byte* sourcePtr, byte* targetPtr, ByteBuffer target, long maxBytes)
         {
@@ -600,16 +553,12 @@ namespace VCDiff.Encoders
 
             return bytesFound;
         }
-#endif
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe long MatchingBytesToRight(long end, long tstart, byte* sourcePtr, byte* targetPtr, ByteBuffer target, long maxBytes)
         {
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
             // ByteBuffer is already pinned, so its safe to just use raw pointer access
             // but Vector<T> can only create vectors from a Span and not an address. 
             // We can probably unroll the while loop in the scalar implementation
@@ -618,7 +567,6 @@ namespace VCDiff.Encoders
             // from an address.
             if (Avx2.IsSupported) return MatchingBytesToRightAvx2(end, tstart, sourcePtr, targetPtr, target, maxBytes);
             if (Sse2.IsSupported) return MatchingBytesToRightSse2(end, tstart, sourcePtr, targetPtr, target, maxBytes);
-#endif
             long sindex = end;
             long tindex = tstart;
             long bytesFound = 0;
@@ -627,7 +575,6 @@ namespace VCDiff.Encoders
             byte* tPtr = targetPtr;
             byte* sPtr = sourcePtr;
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER || NETSTANDARD2_1_OR_GREATER
             int vectorSize = Vector<byte>.Count;
             var tBuf = target.AsSpan();
             var sBuf = source.AsSpan();
@@ -645,7 +592,6 @@ namespace VCDiff.Encoders
                 tindex += vectorSize;
                 sindex += vectorSize;
             }
-#endif
 
             while (bytesFound < maxBytes)
             {

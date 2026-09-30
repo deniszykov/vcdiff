@@ -22,6 +22,37 @@ Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been 
 
 Wherever possible, SSE3 or AVX2 extensions are used on supported systems. Speeds are comparable, albeit slightly slower than the native xdelta3, depending on the chosen blocksize. A lot of work has gone into optimizing out the overhead of garbage collection and memory access through `Memory<T>`, as well as parallelizing computational work with SIMD extensions.
 
+## Changes in this fork
+
+This fork keeps the fast SIMD/unsafe encode and decode paths from upstream while trimming the dependency surface:
+
+- **Target frameworks**: `net6.0` and `net10.0` only (the `netstandard2.0` and `netstandard2.1` targets were removed).
+- **Dependencies**: only `Microsoft.IO.RecyclableMemoryStream`. The `SharpCompress` package and its transitive dependencies, as well as `Newtonsoft.Json`, `System.Text.RegularExpressions`, `PolyShim`, and `System.Runtime.CompilerServices.Unsafe`, were removed.
+- **Smaller build**: instead of depending on the whole `SharpCompress` package, only a minimal XZ/LZMA2 *decompressor* is vendored into the library (decode-only, LZMA2 filter, using the unsafe/SIMD fast decode loop). This supports the xdelta secondary-compression path and drops all of SharpCompress's archive readers/writers and unrelated compressors.
+- **Configurable buffer pooling**: `VcEncoderOptions` and `VcDecoderOptions` accept an `ArrayPool<byte>` (defaulting to `ArrayPool<byte>.Shared` when `null`) that is used for every internal `byte[]`/pinned buffer during encoding and decoding.
+
+### Using the options classes
+
+```csharp
+using System.Buffers;
+using VCDiff.Decoders;
+using VCDiff.Encoders;
+
+var encoderOptions = new VcEncoderOptions
+{
+    BlockSize = 32,
+    BytePool = ArrayPool<byte>.Shared,
+};
+using var encoder = new VcEncoder(dictStream, targetStream, outputStream, encoderOptions);
+
+var decoderOptions = new VcDecoderOptions
+{
+    MaxTargetFileSize = 64 * 1024 * 1024,
+    BytePool = ArrayPool<byte>.Shared,
+};
+using var decoder = new VcDecoder(dictStream, deltaStream, outputStream, decoderOptions);
+```
+
 <details><summary>The original readme, with some changes to the API usage examples</summary>
 <p>
 

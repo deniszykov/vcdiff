@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -72,13 +72,8 @@ namespace VCDiff.Shared
             this.length = length;
         }
 
-#if NET5_0 || NET5_0_OR_GREATER || NETCOREAPP3_1 || NETSTANDARD2_1_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe Span<byte> AsSpan() => MemoryMarshal.CreateSpan(ref Unsafe.AsRef<byte>(bytePtr), (int)length);
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe Span<byte> AsSpan() => new Span<byte>(bytePtr, (int)length);
-#endif
 
         /// <summary>
         /// Dangerously gets the byte pointer.
@@ -124,18 +119,12 @@ namespace VCDiff.Shared
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe byte PeekByte() => *((byte*)this.bytePtr + offset);
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe Span<byte> PeekBytes(int len)
         {
             int sliceLen = (int)(offset + len > this.length ? this.length - offset : len);
-#if NET5_0 || NET5_0_OR_GREATER || NETCOREAPP3_1 || NETSTANDARD2_1_OR_GREATER
             return MemoryMarshal.CreateSpan(ref Unsafe.AsRef<byte>(bytePtr + offset), sliceLen);
-#else
-            return new Span<byte>(bytePtr + offset, sliceLen);
-#endif
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -150,9 +139,7 @@ namespace VCDiff.Shared
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe byte ReadByte() => this.bytePtr[offset++];
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Span<byte> ReadBytesAsSpan(int len)
         {

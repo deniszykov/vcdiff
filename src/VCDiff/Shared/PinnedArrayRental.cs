@@ -1,14 +1,14 @@
-﻿using System;
+using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace VCDiff.Shared
 {
     internal struct PinnedArrayRental : IDisposable
     {
+        private readonly ArrayPool<byte> _pool;
+
         /// <summary>
         /// The data encapsulated by this rental.
         /// </summary>
@@ -37,10 +37,11 @@ namespace VCDiff.Shared
             return Span<byte>.Empty;
         }
 
-        public PinnedArrayRental(int numBytes)
+        public PinnedArrayRental(int numBytes, ArrayPool<byte>? pool = null)
         {
+            _pool = pool ?? ArrayPool<byte>.Shared;
             NumBytes = numBytes;
-            Data = ArrayPool<byte>.Shared.Rent(NumBytes);
+            Data = _pool.Rent(NumBytes);
             Debug.Assert(Data.Length >= numBytes);
             _pin = GCHandle.Alloc(Data, GCHandleType.Pinned);
         }
@@ -50,7 +51,7 @@ namespace VCDiff.Shared
             if (Data != null)
             {
                 _pin.Free();
-                ArrayPool<byte>.Shared.Return(Data, false);
+                _pool.Return(Data, false);
                 Data = null;
             }
         }

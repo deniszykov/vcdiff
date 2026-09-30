@@ -1,23 +1,29 @@
-﻿using SharpCompress.Compressors.Xz;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using VCDiff.Compression;
+using VCDiff.Compression.Xz;
 using VCDiff.Shared;
 
 namespace VCDiff.Compressors
 {
     internal class XzCompressor : ICompressor, IDisposable
     {
-        public XzCompressor()
+        private readonly ArrayPool<byte> _bytePool;
+
+        public XzCompressor(ArrayPool<byte>? bytePool = null)
         {
+            _bytePool = bytePool ?? ArrayPool<byte>.Shared;
+
             addRunCompressedBuffer = new();
             instructionsCompressedBuffer = new();
             addressesCompressedBuffer = new();
 
-            addRunDecompressor = new(addRunCompressedBuffer);
-            instructionsDecompressor = new(instructionsCompressedBuffer);
-            addressesDecompressor = new(addressesCompressedBuffer);
+            addRunDecompressor = new(addRunCompressedBuffer, _bytePool);
+            instructionsDecompressor = new(instructionsCompressedBuffer, _bytePool);
+            addressesDecompressor = new(addressesCompressedBuffer, _bytePool);
         }
 
         private readonly MemoryStream addRunCompressedBuffer;
@@ -64,7 +70,7 @@ namespace VCDiff.Compressors
             memoryStream.Write(compressedData);
             memoryStream.Position = 0;
 
-            var decompressedData = new PinnedArrayRental(uncompressedLength);
+            var decompressedData = new PinnedArrayRental(uncompressedLength, _bytePool);
             xzStream.ReadExactly(decompressedData.AsSpan());
 
             return decompressedData;

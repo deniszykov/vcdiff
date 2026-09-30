@@ -1,5 +1,5 @@
-﻿using SharpCompress.Compressors.Xz;
 using System.IO;
+using VCDiff.Compression.Xz;
 
 namespace VCDiff.Decoders
 {

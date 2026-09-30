@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
@@ -16,13 +16,15 @@ namespace VCDiff.Shared
         private const int CACHE_SIZE = 8192;
 
         private readonly Stream buffer;
+        private readonly ArrayPool<byte> _pool;
         private int lastLenRead;
         private byte[] cache;
         private bool _isDisposed = false;
 
-        public ByteStreamReader(Stream stream)
+        public ByteStreamReader(Stream stream, ArrayPool<byte>? bytePool = null)
         {
-            cache  = ArrayPool<byte>.Shared.Rent(CACHE_SIZE);
+            _pool = bytePool ?? ArrayPool<byte>.Shared;
+            cache  = _pool.Rent(CACHE_SIZE);
             buffer = stream;
         }
 
@@ -64,12 +66,8 @@ namespace VCDiff.Shared
             return 0;
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         public Span<byte> ReadBytesAsSpan(int len)
         {
             byte[] buf = GetCachedBuffer(len);
@@ -78,12 +76,8 @@ namespace VCDiff.Shared
             return actualRead > 0 ? buf.AsSpanFast(actualRead) : Span<byte>.Empty;
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         public Memory<byte> ReadBytes(int len)
         {
             byte[] buf = GetCachedBuffer(len);
@@ -125,29 +119,21 @@ namespace VCDiff.Shared
         {
             if (!_isDisposed)
             {
-                ArrayPool<byte>.Shared.Return(cache, false);
+                _pool.Return(cache, false);
                 _isDisposed = true;
             }
 
             GC.SuppressFinalize(this);
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
         [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.AggressiveInlining)]
-#else
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         private byte[] GetCachedBuffer(int len)
         {
             if (len <= CACHE_SIZE)
                 return cache;
 
-#if NET5_0 || NET5_0_OR_GREATER
             return GC.AllocateUninitializedArray<byte>(len);
-#else
-            return new byte[len];
-#endif
         }
     }
 }

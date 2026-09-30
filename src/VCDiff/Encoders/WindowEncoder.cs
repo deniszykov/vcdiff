@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using VCDiff.Includes;
@@ -57,9 +57,7 @@ namespace VCDiff.Encoders
             }
         }
 
-#if NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-#endif
         private void EncodeInstruction(VCDiffInstructionType inst, int size, byte mode = 0)
         {
             if (lastOpcodeIndex >= 0)
@@ -118,9 +116,7 @@ namespace VCDiff.Encoders
             targetLength += data.Length;
         }
 
-#if NET5_0 || NET5_0_OR_GREATER
         [SkipLocalsInit]
-#endif
         public void Copy(int offset, int length)
         {
             byte mode = addrCache.EncodeAddress(offset, dictionarySize + targetLength, out long encodedAddr);

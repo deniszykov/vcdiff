@@ -1,6 +1,6 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using VCDiff.Includes;
 using VCDiff.Shared;
@@ -25,81 +25,103 @@ namespace VCDiff.Encoders
         private int chunkSize;
         private bool disposeRollingHash = false;
 
-        private NativeAllocation<byte> _nativeAllocation;
+        private byte[]? _sourceArray;
+        private ArrayPool<byte> _bytePool = ArrayPool<byte>.Shared;
+        private bool _ownsOldData;
 
         /// <summary>
-        /// Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
+        /// Creates a new VCDIFF Encoder from a source stream. The input streams will not be
+        /// closed once this object is disposed.
         /// </summary>
-        /// <param name="source">The dictionary (sourceStream file).</param>
+        /// <param name="source">The dictionary (source file).</param>
         /// <param name="target">The target to create the diff from.</param>
         /// <param name="outputStream">The stream to write the diff into.</param>
-        /// <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
-        /// <param name="blockSize">
-        /// The block size to use. Must be a power of two. No match smaller than this block size will be identified.
-        /// Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table, and will halve the setup time
-        /// for a new BlockHash.  However, it also doubles the minimum match length that is guaranteed to be found.
-        /// 
-        /// Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2 accelerated, if supported. 16 is a good default
-        /// for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize for speed.
-        /// </param>
-        /// <param name="chunkSize">
-        /// The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the block size.</param>
-        /// <param name="rollingHash">
-        /// Manually provide a <see cref="RollingHash"/> instance that can be reused for multiple encoding instances
-        /// of the same block size.
-        ///
-        /// If you provide a <see cref="RollingHash"/> instance, you must dispose of it yourself.
-        /// </param>
-        /// <exception cref="ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
-        public unsafe VcEncoder(Stream source, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+        /// <param name="options">The encoder options. See <see cref="VcEncoderOptions"/>.</param>
+        public VcEncoder(Stream source, Stream target, Stream outputStream, VcEncoderOptions options)
         {
-            _nativeAllocation = new NativeAllocation<byte>(source.Length);
-            long remaining = source.Length;
+            _bytePool = options.BytePoolOrDefault;
+
+            int sourceLength = checked((int)source.Length);
+            _sourceArray = _bytePool.Rent(sourceLength);
+            var sourceMemory = _sourceArray.AsMemory(0, sourceLength);
+            long remaining = sourceLength;
             long position = 0;
             while (remaining > 0)
             {
                 int chunk = (int)Math.Min(remaining, int.MaxValue);
-                source.Read(_nativeAllocation.AsSpan(position, chunk));
+                source.Read(sourceMemory.Span.Slice((int)position, chunk));
                 position += chunk;
                 remaining -= chunk;
             }
-            this.oldData = new ByteBuffer(_nativeAllocation);
+            this.oldData = new ByteBuffer(sourceMemory);
+            _ownsOldData = true;
 
-            InitializeEncoder(target, outputStream, maxBufferSize, blockSize, chunkSize, rollingHash);
+            InitializeEncoder(target, outputStream, options);
         }
 
         /// <summary>
-        /// Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
+        /// Creates a new VCDIFF Encoder from a source stream. The input streams will not be
+        /// closed once this object is disposed.
+        /// </summary>
+        /// <param name="source">The dictionary (source file).</param>
+        /// <param name="target">The target to create the diff from.</param>
+        /// <param name="outputStream">The stream to write the diff into.</param>
+        /// <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
+        /// <param name="blockSize">The block size to use. Must be a power of two.</param>
+        /// <param name="chunkSize">The minimum size of a string match that is worth putting into a COPY.</param>
+        /// <param name="rollingHash">A reusable <see cref="RollingHash"/> instance the caller owns.</param>
+        public VcEncoder(Stream source, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+            : this(source, target, outputStream, new VcEncoderOptions
+            {
+                MaxBufferSize = maxBufferSize,
+                BlockSize = blockSize,
+                ChunkSize = chunkSize,
+                RollingHash = rollingHash,
+            })
+        {
+        }
+
+        /// <summary>
+        /// Creates a new VCDIFF Encoder from an existing source buffer. The input streams will
+        /// not be closed once this object is disposed.
+        /// </summary>
+        /// <param name="buffer">The dictionary (source file).</param>
+        /// <param name="target">The target to create the diff from.</param>
+        /// <param name="outputStream">The stream to write the diff into.</param>
+        /// <param name="options">The encoder options. See <see cref="VcEncoderOptions"/>.</param>
+        public VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, VcEncoderOptions options)
+        {
+            _bytePool = options.BytePoolOrDefault;
+            this.oldData = buffer;
+            _ownsOldData = false;
+            InitializeEncoder(target, outputStream, options);
+        }
+
+        /// <summary>
+        /// Creates a new VCDIFF Encoder from an existing source buffer. The input streams will
+        /// not be closed once this object is disposed.
         /// </summary>
         /// <param name="buffer">The dictionary (source file).</param>
         /// <param name="target">The target to create the diff from.</param>
         /// <param name="outputStream">The stream to write the diff into.</param>
         /// <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
-        /// <param name="blockSize">
-        /// The block size to use. Must be a power of two. No match smaller than this block size will be identified.
-        /// Increasing blockSize by a factor of two will halve the amount of memory needed for the next block table, and will halve the setup time
-        /// for a new BlockHash.  However, it also doubles the minimum match length that is guaranteed to be found.
-        /// 
-        /// Blocksizes that are n mod 32 = 0 are AVX2 accelerated. Blocksizes that are n mod 16 = 0 are SSE2 accelerated, if supported. 16 is a good default
-        /// for most scenarios, but you should use a block size of 32 or 64 for very similar data, or to optimize for speed.
-        /// </param>
-        /// <param name="chunkSize">
-        /// The minimum size of a string match that is worth putting into a COPY. This must be bigger than twice the block size.</param>
-        /// <param name="rollingHash">
-        /// Manually provide a <see cref="RollingHash"/> instance that can be reused for multiple encoding instances
-        /// of the same block size.
-        ///
-        /// If you provide a <see cref="RollingHash"/> instance, you must dispose of it yourself.
-        /// </param>
-        /// <exception cref="ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
-        public unsafe VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+        /// <param name="blockSize">The block size to use. Must be a power of two.</param>
+        /// <param name="chunkSize">The minimum size of a string match that is worth putting into a COPY.</param>
+        /// <param name="rollingHash">A reusable <see cref="RollingHash"/> instance the caller owns.</param>
+        public VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+            : this(buffer, target, outputStream, new VcEncoderOptions
+            {
+                MaxBufferSize = maxBufferSize,
+                BlockSize = blockSize,
+                ChunkSize = chunkSize,
+                RollingHash = rollingHash,
+            })
         {
-            this.oldData = buffer;
-            InitializeEncoder(target, outputStream, maxBufferSize, blockSize, chunkSize, rollingHash);
         }
 
-        private void InitializeEncoder(Stream target, Stream outputStream, int maxBufferSize, int blockSize, int chunkSize, RollingHash? rollingHash)
+        private void InitializeEncoder(Stream target, Stream outputStream, VcEncoderOptions options)
         {
+            int maxBufferSize = options.MaxBufferSize;
             if (maxBufferSize <= 0)
                 maxBufferSize = 1;
 
@@ -107,11 +129,12 @@ namespace VCDiff.Encoders
             if (target.Length <= maxBufferSize)
                 this.bufferSize = (int) target.Length;
 
-            this.blockSize = blockSize;
-            this.chunkSize = chunkSize < 2 ? this.blockSize * 2 : chunkSize;
-            this.targetData = new ByteStreamReader(target);
+            this.blockSize = options.BlockSize;
+            this.chunkSize = options.ChunkSize < 2 ? this.blockSize * 2 : options.ChunkSize;
+            this.targetData = new ByteStreamReader(target, _bytePool);
             this.outputStream = outputStream;
 
+            var rollingHash = options.RollingHash;
             if (rollingHash == null)
             {
                 this.disposeRollingHash = true;
@@ -155,9 +178,10 @@ namespace VCDiff.Encoders
                 return VCDiffResult.ERROR;
 
             // Read in all the dictionary it is the only thing that needs to be
-            Encode_Setup(interleaved, checksumFormat, out var chunker, out var buf);
+            Encode_Setup(interleaved, checksumFormat, out var chunker, out var buffer, out var bufferLength);
             try
             {
+                var buf = new Memory<byte>(buffer, 0, bufferLength);
                 var bufSpan = buf.Span;
                 while (targetData.CanRead)
                 {
@@ -172,6 +196,7 @@ namespace VCDiff.Encoders
             finally
             {
                 chunker.Dispose();
+                _bytePool.Return(buffer, false);
             }
         }
 
@@ -197,9 +222,10 @@ namespace VCDiff.Encoders
                 return VCDiffResult.ERROR;
 
             //read in all the dictionary it is the only thing that needs to be
-            Encode_Setup(interleaved, checksumFormat, out var chunker, out var buf);
+            Encode_Setup(interleaved, checksumFormat, out var chunker, out var buffer, out var bufferLength);
             try
             {
+                var buf = new Memory<byte>(buffer, 0, bufferLength);
                 while (targetData.CanRead)
                 {
                     int read = await targetData.ReadBytesIntoBufAsync(buf);
@@ -213,6 +239,7 @@ namespace VCDiff.Encoders
             finally
             {
                 chunker.Dispose();
+                _bytePool.Return(buffer, false);
             }
         }
 
@@ -240,14 +267,15 @@ namespace VCDiff.Encoders
                 throw new ArgumentException("Interleaved diffs can not have an xdelta3 checksum!");
         }
 
-        private void Encode_Setup(bool interleaved, ChecksumFormat checksumFormat, out ChunkEncoder chunkEncoder, out Memory<byte> buf)
+        private void Encode_Setup(bool interleaved, ChecksumFormat checksumFormat, out ChunkEncoder chunkEncoder, out byte[] buffer, out int bufferLength)
         {
             var dictionary = new BlockHash(oldData!, 0, hasher, blockSize);
             dictionary.AddAllBlocks();
             oldData!.Position = 0;
 
             chunkEncoder = new ChunkEncoder(dictionary, oldData, hasher, checksumFormat, interleaved, chunkSize);
-            buf = new Memory<byte>(new byte[bufferSize]);
+            buffer = _bytePool.Rent(bufferSize);
+            bufferLength = bufferSize;
         }
 
         /// <summary>
@@ -255,7 +283,12 @@ namespace VCDiff.Encoders
         /// </summary>
         public void Dispose()
         {
-            _nativeAllocation.Dispose();
+            if (_ownsOldData && oldData != null)
+            {
+                oldData.Dispose();
+                if (_sourceArray != null)
+                    _bytePool.Return(_sourceArray, false);
+            }
             targetData?.Dispose();
             if (this.disposeRollingHash)
                 this.hasher.Dispose();
