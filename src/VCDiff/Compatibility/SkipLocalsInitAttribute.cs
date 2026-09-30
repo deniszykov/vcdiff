@@ -1,3 +1,6 @@
+// Copyright (c) Denis Zykov and contributors (DeepSeek, ClaudeCode).
+// Licensed under the Apache License, Version 2.0.
+
 // Polyfill for [SkipLocalsInit], which was introduced in .NET 5.0.
 // The C# compiler recognizes this attribute by its full name
 // (System.Runtime.CompilerServices.SkipLocalsInitAttribute) and, when present,

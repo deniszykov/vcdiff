@@ -1,3 +1,6 @@
+// Copyright (c) Denis Zykov and contributors (DeepSeek, ClaudeCode).
+// Licensed under the Apache License, Version 2.0.
+
 using System.Buffers;
 
 namespace VCDiff.Decoders
