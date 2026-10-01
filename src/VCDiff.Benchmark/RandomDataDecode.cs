@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using BenchmarkDotNet.Attributes;
 using VCDiff.Decoders;
 using VCDiff.Encoders;
@@ -43,7 +43,7 @@ public class RandomDataDecode
 		this._sourceStream.Seek(0, SeekOrigin.Begin);
 		receiver = new MemoryStream(this._data.Length);
 		using var targetStream = new MemoryStream(targetData);
-		using var encoder = new VcEncoder(this._sourceStream, targetStream, receiver, 1, this.BlockSize);
+		using var encoder = new VcdiffEncoder(this._sourceStream, targetStream, receiver, 1, this.BlockSize);
 		encoder.Encode();
 	}
 
@@ -56,7 +56,7 @@ public class RandomDataDecode
 			this._sourceStream.Seek(0, SeekOrigin.Begin);
 			this._patchSlightModified.Seek(0, SeekOrigin.Begin);
 			result.Position = 0;
-			using var decoder = new VcDecoder(this._sourceStream, this._patchSlightModified, result, int.MaxValue);
+			using var decoder = new VcdiffDecoder(this._sourceStream, this._patchSlightModified, result, int.MaxValue);
 			decoder.Decode(out var written);
 		}
 	}
@@ -70,7 +70,7 @@ public class RandomDataDecode
 			this._sourceStream.Seek(0, SeekOrigin.Begin);
 			this._patchHeavyModified.Seek(0, SeekOrigin.Begin);
 			result.Position = 0;
-			using var decoder = new VcDecoder(this._sourceStream, this._patchHeavyModified, result, int.MaxValue);
+			using var decoder = new VcdiffDecoder(this._sourceStream, this._patchHeavyModified, result, int.MaxValue);
 			decoder.Decode(out var written);
 		}
 	}

@@ -26,7 +26,7 @@ public class LibraryFixTests
 		new Random(5).NextBytes(dictionary);
 
 		var manager = new RecyclableMemoryStreamManager();
-		using var encoder = new WindowEncoder(dictionary.Length, ChecksumFormat.None, false, manager);
+		using var encoder = new WindowEncoder(dictionary.Length, WindowChecksumFormat.None, false, manager);
 		encoder.Reset(0);
 		encoder.Add(new byte[] { 0xAA }); // ADD 1
 		encoder.Copy(10, 4); // COPY 4 SELF => ADD 1 + COPY 4 mode 0 (opcode 163)
@@ -53,7 +53,7 @@ public class LibraryFixTests
 		dictionary.AsSpan(20, 4).CopyTo(expected.AsSpan(5));
 		expected[9] = 0xBB;
 
-		using var decoder = new VcDiffDecoder(new ReadOnlySequence<byte>(dictionary));
+		using var decoder = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(dictionary));
 		var output = new byte[16];
 		var status = decoder.Decode(delta.ToArray(), output, out _, out var written, true);
 		Assert.Equal(OperationStatus.Done, status);
@@ -75,7 +75,7 @@ public class LibraryFixTests
 			target.Write(dictionary, rnd.Next(dictionary.Length - 8), 4 + rnd.Next(3));
 		}
 
-		var options = new VcEncoderOptions { BlockSize = 2, ChunkSize = 4 };
+		var options = new VcdiffEncoderOptions { BlockSize = 2, MinMatchSize = 4 };
 		var delta = Encode(dictionary, target.ToArray(), options);
 		Assert.Equal(target.ToArray(), Decode(dictionary, delta));
 	}
@@ -119,7 +119,7 @@ public class LibraryFixTests
 				if (length > blockSize)
 					target[0] ^= 0xFF;
 
-				using var encoder = new VcDiffEncoder(new ReadOnlySequence<byte>(dictionary), new VcEncoderOptions { BlockSize = blockSize });
+				using var encoder = new VcdiffSpanEncoder(new ReadOnlySequence<byte>(dictionary), new VcdiffEncoderOptions { BlockSize = blockSize });
 				var output = new byte[4096];
 				Assert.Equal(OperationStatus.Done, encoder.Encode(target, output, out var consumed, out var written, true));
 				Assert.Equal(length, consumed);
@@ -145,7 +145,7 @@ public class LibraryFixTests
 	public void HugeHeaderSectionLength_IsTruncationNotException(byte indicator)
 	{
 		var delta = new byte[] { 0xD6, 0xC3, 0xC4, 0x00, indicator, 0x87, 0xFF, 0xFF, 0xFF, 0x7F, 1, 2, 3 };
-		using var decoder = new VcDiffDecoder(new ReadOnlySequence<byte>(new byte[16]));
+		using var decoder = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(new byte[16]));
 		var output = new byte[16];
 
 		Assert.Equal(OperationStatus.NeedMoreData, decoder.Decode(delta, output, out var consumed, out _, false));
@@ -164,9 +164,9 @@ public class LibraryFixTests
 
 	// ------------------------------------------------------------------ helpers
 
-	private static byte[] Encode(byte[] dictionary, byte[] target, VcEncoderOptions options)
+	private static byte[] Encode(byte[] dictionary, byte[] target, VcdiffEncoderOptions options)
 	{
-		using var encoder = new VcDiffEncoder(new ReadOnlySequence<byte>(dictionary), options);
+		using var encoder = new VcdiffSpanEncoder(new ReadOnlySequence<byte>(dictionary), options);
 		var delta = new MemoryStream();
 		var output = new byte[1024];
 		var input = target.AsSpan();
@@ -183,7 +183,7 @@ public class LibraryFixTests
 
 	private static byte[] Decode(byte[] dictionary, byte[] delta)
 	{
-		using var decoder = new VcDiffDecoder(new ReadOnlySequence<byte>(dictionary));
+		using var decoder = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(dictionary));
 		var target = new MemoryStream();
 		var output = new byte[1024];
 		var input = delta.AsSpan();

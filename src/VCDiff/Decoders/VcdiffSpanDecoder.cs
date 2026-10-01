@@ -27,7 +27,7 @@ namespace VCDiff.Decoders;
 ///         <see cref="Dispose" /> is called.
 ///     </para>
 /// </remarks>
-public sealed class VcDiffDecoder : IDisposable
+public sealed class VcdiffSpanDecoder : IDisposable
 {
 	private enum ParseStatus
 	{
@@ -40,7 +40,7 @@ public sealed class VcDiffDecoder : IDisposable
 	private const int INPUT_BUFFER_SIZE = 16 * 1024;
 
 	private readonly bool _allowCustomCodeTable;
-	private readonly IDictionaryReader _dictionary;
+	private readonly ISourceReader _dictionary;
 	private readonly bool _disableChecksums;
 	private readonly DeltaInputBuffer _input;
 	private readonly int _maxTargetWindowSize;
@@ -55,7 +55,7 @@ public sealed class VcDiffDecoder : IDisposable
 	private long _addRunLength;
 	private int _addRunPos;
 	private uint _checksum;
-	private ChecksumFormat _checksumFormat;
+	private WindowChecksumFormat _checksumFormat;
 	private CustomCodeTableDecoder? _customTable;
 
 	private bool _disposed;
@@ -103,9 +103,9 @@ public sealed class VcDiffDecoder : IDisposable
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
     ///     instance.
     /// </param>
-    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
-    public VcDiffDecoder(ReadOnlySequence<byte> dictionary, VcDecoderOptions? options = null)
-		: this(new ReadOnlySequenceSource(dictionary), options)
+    /// <param name="options">The decoder options. See <see cref="VcdiffDecoderOptions" />.</param>
+    public VcdiffSpanDecoder(ReadOnlySequence<byte> dictionary, VcdiffDecoderOptions? options = null)
+		: this(new SequenceSourceReader(dictionary), options)
 	{
 	}
 
@@ -116,8 +116,8 @@ public sealed class VcDiffDecoder : IDisposable
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
     ///     instance.
     /// </param>
-    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
-    public VcDiffDecoder(IDictionaryReader dictionary, VcDecoderOptions? options = null)
+    /// <param name="options">The decoder options. See <see cref="VcdiffDecoderOptions" />.</param>
+    public VcdiffSpanDecoder(ISourceReader dictionary, VcdiffDecoderOptions? options = null)
 		: this(ValidateOptions(options), dictionary, true)
 	{
 	}
@@ -132,10 +132,10 @@ public sealed class VcDiffDecoder : IDisposable
     ///     Whether the delta may carry a custom code table. A custom code table is itself decoded with a nested decoder
     ///     that must not accept another one (RFC 3284 section 7), which also bounds the nesting depth.
     /// </param>
-    internal VcDiffDecoder(VcDecoderOptions options, IDictionaryReader dictionary, bool allowCustomCodeTable)
+    internal VcdiffSpanDecoder(VcdiffDecoderOptions options, ISourceReader dictionary, bool allowCustomCodeTable)
 	{
 		this._pool = options.BytePoolOrDefault;
-		this._maxTargetWindowSize = options.MaxTargetFileSize;
+		this._maxTargetWindowSize = options.MaxTargetWindowSize;
 		this._disableChecksums = options.DisableChecksums;
 		this._allowCustomCodeTable = allowCustomCodeTable;
 		this._dictionary = dictionary;
@@ -152,11 +152,11 @@ public sealed class VcDiffDecoder : IDisposable
     /// </summary>
     internal bool IsSdchFormat => this._isSdch;
 
-	private static VcDecoderOptions ValidateOptions(VcDecoderOptions? options)
+	private static VcdiffDecoderOptions ValidateOptions(VcdiffDecoderOptions? options)
 	{
-		options ??= new VcDecoderOptions();
-		if (options.MaxTargetFileSize <= 0)
-			throw VcdiffException.MaxTargetFileSizeNotPositive();
+		options ??= new VcdiffDecoderOptions();
+		if (options.MaxTargetWindowSize <= 0)
+			throw VcdiffException.MaxTargetWindowSizeNotPositive();
 
 		return options;
 	}
@@ -182,7 +182,7 @@ public sealed class VcDiffDecoder : IDisposable
     public OperationStatus Decode(ReadOnlySpan<byte> input, Span<byte> output, out int inputConsumed, out int outputWritten, bool isFinal)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(VcDiffDecoder));
+			throw new ObjectDisposedException(nameof(VcdiffSpanDecoder));
 
 		inputConsumed = 0;
 		outputWritten = 0;
@@ -358,16 +358,16 @@ public sealed class VcDiffDecoder : IDisposable
 			if (!this._allowCustomCodeTable)
 				return ParseStatus.Error;
 
-			var len = VarIntBe.ParseInt32(data.Slice(i), out var lenBytes);
-			if (len == (int)VcDiffResult.EOD)
+			var result = VarIntBe.TryParseInt32(data.Slice(i), out var len, out var lenBytes);
+			if (result == ParseResult.NeedMoreData)
 				return ParseStatus.NeedMore;
-			if (len == (int)VcDiffResult.ERROR || len <= 0)
+			if (result == ParseResult.Error || len <= 0)
 				return ParseStatus.Error;
 			if (len > data.Length - i - lenBytes)
 				return ParseStatus.NeedMore;
 
 			var ctd = new CustomCodeTableDecoder(this._pool);
-			if (ctd.Decode(this._input.GetReadOnlySequence(i, lenBytes + len)) != VcDiffResult.SUCCESS)
+			if (!ctd.Decode(this._input.GetReadOnlySequence(i, lenBytes + len)))
 				return ParseStatus.Error;
 
 			customTable = ctd;
@@ -484,16 +484,16 @@ public sealed class VcDiffDecoder : IDisposable
 			return ParseStatus.Error;
 
 		uint checksum = 0;
-		var cf = ChecksumFormat.None;
+		var cf = WindowChecksumFormat.None;
 		if ((winIndicator & (int)VcDiffWindowFlags.VCDCHECKSUM) != 0)
 		{
-			cf = this._isSdch ? ChecksumFormat.SDCH : ChecksumFormat.Xdelta3;
+			cf = this._isSdch ? WindowChecksumFormat.Sdch : WindowChecksumFormat.Xdelta3;
 			if (this._isSdch)
 			{
-				var parsed = VarIntBe.ParseInt64(data.Slice(i), out var vb);
-				if (parsed == (long)VcDiffResult.EOD)
+				var result = VarIntBe.TryParseInt64(data.Slice(i), out var parsed, out var vb);
+				if (result == ParseResult.NeedMoreData)
 					return ParseStatus.NeedMore;
-				if (parsed == (long)VcDiffResult.ERROR)
+				if (result == ParseResult.Error)
 					return ParseStatus.Error;
 
 				checksum = (uint)parsed;
@@ -546,10 +546,10 @@ public sealed class VcDiffDecoder : IDisposable
 	private static ParseStatus ReadVarInt(ReadOnlySpan<byte> data, ref int index, out int value)
 	{
 		value = 0;
-		var parsed = VarIntBe.ParseInt32(data.Slice(index), out var vb);
-		if (parsed == (int)VcDiffResult.EOD)
+		var result = VarIntBe.TryParseInt32(data.Slice(index), out var parsed, out var vb);
+		if (result == ParseResult.NeedMoreData)
 			return ParseStatus.NeedMore;
-		if (parsed == (int)VcDiffResult.ERROR)
+		if (result == ParseResult.Error)
 			return ParseStatus.Error;
 
 		index += vb;
@@ -560,7 +560,7 @@ public sealed class VcDiffDecoder : IDisposable
 	private bool IsBufferingSections => this._headerParsed && this._windowHeaderParsed && !this._interleavedWindow && !this._sectionsBuffered;
 
 	// The staging buffer for the current target window. It is rented only when a window can not be
-	// decoded straight into the output, and its size is bounded by MaxTargetFileSize (validated in the
+	// decoded straight into the output, and its size is bounded by MaxTargetWindowSize (validated in the
 	// window header).
 	private byte[] EnsureTargetWindow()
 	{
@@ -583,7 +583,7 @@ public sealed class VcDiffDecoder : IDisposable
 	{
 		this._targetDecoded = 0;
 		this._targetEmitted = 0;
-		this._runningChecksum = this._checksumFormat == ChecksumFormat.Xdelta3 ? 1u : 0u;
+		this._runningChecksum = this._checksumFormat == WindowChecksumFormat.Xdelta3 ? 1u : 0u;
 		this._instrPos = 0;
 		this._addRunPos = 0;
 		this._addrPos = 0;
@@ -633,7 +633,7 @@ public sealed class VcDiffDecoder : IDisposable
 
 	private bool VerifyChecksum()
 	{
-		if (this._disableChecksums || this._checksumFormat == ChecksumFormat.None)
+		if (this._disableChecksums || this._checksumFormat == WindowChecksumFormat.None)
 			return true;
 
 		var computed = this._targetDecoded == 0 ? 1u : this._runningChecksum;
@@ -741,7 +741,7 @@ public sealed class VcDiffDecoder : IDisposable
 		var addrSpan = this._addressesData.AsSpan();
 
 		var r = this.TryDecodeInstruction(instrSpan.Slice(this._instrPos), out var used, out var type, out var size, out var mode);
-		if (r != VcDiffResult.SUCCESS)
+		if (r != ParseResult.Success)
 			return false;
 
 		this._instrPos += used;
@@ -771,7 +771,7 @@ public sealed class VcDiffDecoder : IDisposable
 			case VcDiffInstructionType.COPY:
 				var here = this._sourceSegmentLength + this._targetDecoded;
 				var decoded = this._addressCache.DecodeAddress(here, mode, addrSpan, ref this._addrPos, out var status);
-				if (status != VcDiffResult.SUCCESS)
+				if (status != ParseResult.Success)
 					return false;
 
 				return this.CopyTarget(window, decoded, size);
@@ -808,13 +808,13 @@ public sealed class VcDiffDecoder : IDisposable
 		else
 		{
 			var r = this.TryDecodeInstruction(data, out var used, out type, out size, out mode);
-			if (r == VcDiffResult.EOD)
+			if (r == ParseResult.NeedMoreData)
 			{
 				needMore = moreToCome;
 				return false;
 			}
 
-			if (r != VcDiffResult.SUCCESS)
+			if (r != ParseResult.Success)
 				return false;
 
 			this.SkipInterleaved(used);
@@ -864,14 +864,14 @@ public sealed class VcDiffDecoder : IDisposable
 				var here = this._sourceSegmentLength + this._targetDecoded;
 				var addrIndex = 0;
 				var decoded = this._addressCache.DecodeAddress(here, mode, data, ref addrIndex, out var status);
-				if (status == VcDiffResult.EOD)
+				if (status == ParseResult.NeedMoreData)
 				{
 					this.SavePending(type, size, mode);
 					needMore = moreToCome;
 					return false;
 				}
 
-				if (status != VcDiffResult.SUCCESS)
+				if (status != ParseResult.Success)
 					return false;
 
 				this.SkipInterleaved(addrIndex);
@@ -883,7 +883,7 @@ public sealed class VcDiffDecoder : IDisposable
 		}
 	}
 
-	private VcDiffResult TryDecodeInstruction(ReadOnlySpan<byte> data, out int bytesUsed, out VcDiffInstructionType type, out int size, out byte mode)
+	private ParseResult TryDecodeInstruction(ReadOnlySpan<byte> data, out int bytesUsed, out VcDiffInstructionType type, out int size, out byte mode)
 	{
 		bytesUsed = 0;
 		type = VcDiffInstructionType.NOOP;
@@ -917,7 +917,7 @@ public sealed class VcDiffDecoder : IDisposable
 			}
 
 			if (index >= data.Length)
-				return VcDiffResult.EOD;
+				return ParseResult.NeedMoreData;
 
 			var op = data[index];
 			if (inst2[op] != CodeTable.N)
@@ -934,11 +934,9 @@ public sealed class VcDiffDecoder : IDisposable
 
 		if (instructionSize == 0)
 		{
-			var parsed = VarIntBe.ParseInt32(data.Slice(index), out var vb);
-			if (parsed == (int)VcDiffResult.ERROR)
-				return VcDiffResult.ERROR;
-			if (parsed == (int)VcDiffResult.EOD)
-				return VcDiffResult.EOD;
+			var result = VarIntBe.TryParseInt32(data.Slice(index), out var parsed, out var vb);
+			if (result != ParseResult.Success)
+				return result;
 
 			index += vb;
 			size = parsed;
@@ -950,7 +948,7 @@ public sealed class VcDiffDecoder : IDisposable
 		type = (VcDiffInstructionType)instructionType;
 		bytesUsed = index;
 		this._pendingSecondOpcode = pending;
-		return VcDiffResult.SUCCESS;
+		return ParseResult.Success;
 	}
 
 	private bool CopyTarget(Span<byte> window, long decodedAddress, int size)
@@ -999,7 +997,7 @@ public sealed class VcDiffDecoder : IDisposable
 		data.CopyTo(window.Slice(this._targetDecoded));
 		this._targetDecoded += data.Length;
 
-		if (this._checksumFormat != ChecksumFormat.None && data.Length > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, data);
+		if (this._checksumFormat != WindowChecksumFormat.None && data.Length > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, data);
 	}
 
 	private void WriteDictionaryTarget(Span<byte> window, long dictionaryOffset, int size)
@@ -1008,7 +1006,7 @@ public sealed class VcDiffDecoder : IDisposable
 		this._dictionary.CopyTo(dictionaryOffset, span);
 		this._targetDecoded += size;
 
-		if (this._checksumFormat != ChecksumFormat.None && size > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, span);
+		if (this._checksumFormat != WindowChecksumFormat.None && size > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, span);
 	}
 
 	private void WriteRunTarget(Span<byte> window, byte value, int size)
@@ -1017,7 +1015,7 @@ public sealed class VcDiffDecoder : IDisposable
 		span.Fill(value);
 		this._targetDecoded += size;
 
-		if (this._checksumFormat != ChecksumFormat.None && size > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, span);
+		if (this._checksumFormat != WindowChecksumFormat.None && size > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, span);
 	}
 
 	private int EmitTarget(Span<byte> output)
@@ -1066,7 +1064,7 @@ public sealed class VcDiffDecoder : IDisposable
 }
 
 /// <summary>
-///     Why a <see cref="VcDiffDecoder" /> reported <see cref="OperationStatus.InvalidData" />.
+///     Why a <see cref="VcdiffSpanDecoder" /> reported <see cref="OperationStatus.InvalidData" />.
 /// </summary>
 internal enum DecodeFailure
 {
@@ -1078,7 +1076,7 @@ internal enum DecodeFailure
 	/// <summary>The delta is corrupt or inconsistent with the dictionary.</summary>
 	Malformed,
 
-	/// <summary>A target window is larger than <see cref="VcDecoderOptions.MaxTargetFileSize" />.</summary>
+	/// <summary>A target window is larger than <see cref="VcdiffDecoderOptions.MaxTargetWindowSize" />.</summary>
 	TargetWindowTooLarge,
 
 	/// <summary>The header names a secondary compressor other than xdelta3 LZMA (id 2).</summary>

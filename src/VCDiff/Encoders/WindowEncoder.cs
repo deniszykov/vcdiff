@@ -22,7 +22,7 @@ internal sealed class WindowEncoder : IDisposable
 
 	// Pooled, block based streams: a window never needs one contiguous buffer.
 	private readonly RecyclableMemoryStream addressForCopy;
-	private readonly ChecksumFormat checksumFormat;
+	private readonly WindowChecksumFormat checksumFormat;
 	private readonly RecyclableMemoryStream dataForAddAndRun;
 	private readonly long dictionarySize;
 	private readonly RecyclableMemoryStream instructionAndSizes;
@@ -36,7 +36,7 @@ internal sealed class WindowEncoder : IDisposable
 
 	//This is a window encoder for the VCDIFF format
 	//it is reused for every window, call Reset before encoding each one
-	public WindowEncoder(long dictionarySize, ChecksumFormat checksumFormat, bool interleaved, RecyclableMemoryStreamManager manager)
+	public WindowEncoder(long dictionarySize, WindowChecksumFormat checksumFormat, bool interleaved, RecyclableMemoryStreamManager manager)
 	{
 		this.checksumFormat = checksumFormat;
 		this.interleaved = interleaved;
@@ -165,7 +165,7 @@ internal sealed class WindowEncoder : IDisposable
 
 				// interleaved implies SDCH checksum if any.
 				+
-				(this.checksumFormat == ChecksumFormat.SDCH ? VarIntBe.GetLength(this.checksum) : 0);
+				(this.checksumFormat == WindowChecksumFormat.Sdch ? VarIntBe.GetLength(this.checksum) : 0);
 		}
 
 		var lengthOfDelta = VarIntBe.GetLength(this.targetLength) +
@@ -177,9 +177,9 @@ internal sealed class WindowEncoder : IDisposable
 			(int)this.instructionAndSizes.Length +
 			(int)this.addressForCopy.Length;
 
-		if (this.checksumFormat == ChecksumFormat.SDCH)
+		if (this.checksumFormat == WindowChecksumFormat.Sdch)
 			lengthOfDelta += VarIntBe.GetLength(this.checksum);
-		else if (this.checksumFormat == ChecksumFormat.Xdelta3) lengthOfDelta += 4;
+		else if (this.checksumFormat == WindowChecksumFormat.Xdelta3) lengthOfDelta += 4;
 
 		return lengthOfDelta;
 	}
@@ -194,7 +194,7 @@ internal sealed class WindowEncoder : IDisposable
 		var pos = 0;
 
 		//Google's Checksum Implementation Support
-		if (this.checksumFormat != ChecksumFormat.None)
+		if (this.checksumFormat != WindowChecksumFormat.None)
 			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE | (byte)VcDiffWindowFlags.VCDCHECKSUM; //win indicator
 		else
 			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE; //win indicator
@@ -223,12 +223,12 @@ internal sealed class WindowEncoder : IDisposable
 			switch (this.checksumFormat)
 			{
 				//Google Checksum Support
-				case ChecksumFormat.SDCH:
+				case WindowChecksumFormat.Sdch:
 					pos += VarIntBe.Write(this.checksum, header.Slice(pos));
 					break;
 
 				// Xdelta checksum support.
-				case ChecksumFormat.Xdelta3:
+				case WindowChecksumFormat.Xdelta3:
 					BinaryPrimitives.WriteUInt32BigEndian(header.Slice(pos), this.checksum);
 					pos += sizeof(uint);
 					break;
@@ -248,7 +248,7 @@ internal sealed class WindowEncoder : IDisposable
 			pos += VarIntBe.Write(0, header.Slice(pos)); //length of addresses for copys
 
 			//Google Checksum Support
-			if (this.checksumFormat == ChecksumFormat.SDCH) pos += VarIntBe.Write(this.checksum, header.Slice(pos));
+			if (this.checksumFormat == WindowChecksumFormat.Sdch) pos += VarIntBe.Write(this.checksum, header.Slice(pos));
 
 			outputStream.Write(header.Slice(0, pos));
 			this.instructionAndSizes.WriteTo(outputStream); //data for instructions and sizes, in interleaved it is everything

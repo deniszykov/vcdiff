@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -96,10 +96,10 @@ public class CustomCodeTableTests
 		using var source = new MemoryStream(Dictionary);
 		using var deltaStream = new MemoryStream(delta);
 		using var output = new MemoryStream();
-		using (var decoder = new VcDecoder(source, deltaStream, output))
+		using (var decoder = new VcdiffDecoder(source, deltaStream, output))
 		{
 			var (result, written) = await decoder.DecodeAsync();
-			Assert.Equal(VcDiffResult.SUCCESS, result);
+			Assert.Equal(VcdiffResult.Success, result);
 			Assert.Equal(SwappedExpected.Length, written);
 		}
 
@@ -350,8 +350,8 @@ public class CustomCodeTableTests
 		using var output = new MemoryStream();
 		try
 		{
-			using var decoder = new VcDecoder(source, deltaStream, output);
-			if (decoder.Decode(out var written) != VcDiffResult.SUCCESS) return null;
+			using var decoder = new VcdiffDecoder(source, deltaStream, output);
+			if (decoder.Decode(out var written) != VcdiffResult.Success) return null;
 			Assert.Equal(output.Length, written);
 		}
 		catch (Exception e) when (e is not Xunit.Sdk.XunitException)
@@ -371,7 +371,7 @@ public class CustomCodeTableTests
 
 	private static byte[]? TryDecodeStreaming(byte[] delta, int inChunk = int.MaxValue)
 	{
-		using var decoder = new VcDiffDecoder(new ReadOnlySequence<byte>(Dictionary));
+		using var decoder = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(Dictionary));
 		var result = new MemoryStream();
 		var outBuf = new byte[16];
 

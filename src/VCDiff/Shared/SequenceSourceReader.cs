@@ -13,7 +13,7 @@ namespace VCDiff.Shared;
 ///     referenced in place and never copied or pinned: each read is served as a <see cref="Span{T}" /> over the
 ///     original segment, so the dictionary does not have to be available as a single contiguous block of memory.
 /// </summary>
-public sealed unsafe class ReadOnlySequenceSource : IDictionaryReader
+public sealed unsafe class SequenceSourceReader : ISourceReader
 {
 	private readonly ReadOnlySequence<byte> sequence;
 	private readonly ReadOnlyMemory<byte>[] segments;
@@ -42,7 +42,7 @@ public sealed unsafe class ReadOnlySequenceSource : IDictionaryReader
 	///     Optional action invoked exactly once when this instance is disposed, allowing an external resource's
 	///     lifetime to be tied to this reader (for example <c>stream.Dispose</c>).
 	/// </param>
-	public ReadOnlySequenceSource(ReadOnlySequence<byte> sequence, Action? releaseSequence = null)
+	public SequenceSourceReader(ReadOnlySequence<byte> sequence, Action? releaseSequence = null)
 	{
 		if (sequence.Length > int.MaxValue)
 			throw VcdiffException.DictionaryTooLarge();

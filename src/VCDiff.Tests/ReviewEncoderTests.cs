@@ -37,20 +37,20 @@ public class ReviewEncoderTests
 		return target;
 	}
 
-	private static byte[] EncodeBaseline(byte[] dict, byte[] target, VcEncoderOptions options, bool interleaved = false, ChecksumFormat checksum = ChecksumFormat.None)
+	private static byte[] EncodeBaseline(byte[] dict, byte[] target, VcdiffEncoderOptions options, bool interleaved = false, WindowChecksumFormat checksum = WindowChecksumFormat.None)
 	{
 		using var tgt = new MemoryStream(target);
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(new MemoryStream(dict, false), tgt, delta, options);
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode(interleaved, checksum));
+		using var enc = new VcdiffEncoder(new MemoryStream(dict, false), tgt, delta, options);
+		Assert.Equal(VcdiffResult.Success, enc.Encode(interleaved, checksum));
 		return delta.ToArray();
 	}
 
-	private static byte[] EncodeWith(Stream source, Stream target, VcEncoderOptions options, bool interleaved = false, ChecksumFormat checksum = ChecksumFormat.None)
+	private static byte[] EncodeWith(Stream source, Stream target, VcdiffEncoderOptions options, bool interleaved = false, WindowChecksumFormat checksum = WindowChecksumFormat.None)
 	{
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(source, target, delta, options);
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode(interleaved, checksum));
+		using var enc = new VcdiffEncoder(source, target, delta, options);
+		Assert.Equal(VcdiffResult.Success, enc.Encode(interleaved, checksum));
 		return delta.ToArray();
 	}
 
@@ -59,8 +59,8 @@ public class ReviewEncoderTests
 		using var src = new MemoryStream(dict);
 		using var dlt = new MemoryStream(delta);
 		using var output = new MemoryStream();
-		using var dec = new VcDecoder(src, dlt, output);
-		Assert.Equal(VcDiffResult.SUCCESS, dec.Decode(out _));
+		using var dec = new VcdiffDecoder(src, dlt, output);
+		Assert.Equal(VcdiffResult.Success, dec.Decode(out _));
 		return output.ToArray();
 	}
 
@@ -165,19 +165,19 @@ public class ReviewEncoderTests
 
 	// ------------------------------------------------------------------ source in place
 
-	public static TheoryData<int, bool, ChecksumFormat> SourceCases => new() {
-		{ 16, false, ChecksumFormat.None },
-		{ 16, true, ChecksumFormat.SDCH },
-		{ 16, false, ChecksumFormat.Xdelta3 },
-		{ 512, false, ChecksumFormat.SDCH } // straddle buffer larger than the stack limit
+	public static TheoryData<int, bool, WindowChecksumFormat> SourceCases => new() {
+		{ 16, false, WindowChecksumFormat.None },
+		{ 16, true, WindowChecksumFormat.Sdch },
+		{ 16, false, WindowChecksumFormat.Xdelta3 },
+		{ 512, false, WindowChecksumFormat.Sdch } // straddle buffer larger than the stack limit
 	};
 
 	[Theory, MemberData(nameof(SourceCases))]
-	public void SourceStreamVariants_ProduceIdenticalDeltas(int blockSize, bool interleaved, ChecksumFormat checksum)
+	public void SourceStreamVariants_ProduceIdenticalDeltas(int blockSize, bool interleaved, WindowChecksumFormat checksum)
 	{
 		var dict = MakeDictionary(64 * 1024 + 123);
 		var target = MakeTarget(dict, 200 * 1024 + 7);
-		var options = new VcEncoderOptions { BlockSize = blockSize, ChunkSize = blockSize * 2 };
+		var options = new VcdiffEncoderOptions { BlockSize = blockSize, MinMatchSize = blockSize * 2 };
 		var expected = EncodeBaseline(dict, target, options, interleaved, checksum);
 		Assert.Equal(target, Decode(dict, expected));
 
@@ -237,8 +237,8 @@ public class ReviewEncoderTests
 		using var src = new MemoryStream();
 		src.Write(dict, 0, dict.Length); // Position == Length
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(src, new MemoryStream(target), delta);
-		Assert.Equal(VcDiffResult.ERROR, enc.Encode());
+		using var enc = new VcdiffEncoder(src, new MemoryStream(target), delta);
+		Assert.Equal(VcdiffResult.Error, enc.Encode());
 	}
 
 	// ------------------------------------------------------------------ window boundaries
@@ -256,15 +256,15 @@ public class ReviewEncoderTests
 	[InlineData(2, 2 * MiB)]
 	[InlineData(2, 2 * MiB + 1)]
 	[InlineData(0, MiB + 1)] // <= 0 means 1 MiB
-	public void TargetWindows_DoNotDependOnReadGranularity(int maxBufferSize, int targetLength)
+	public void TargetWindows_DoNotDependOnReadGranularity(int maxWindowSizeMiB, int targetLength)
 	{
 		var dict = MakeDictionary(32 * 1024);
 		var target = MakeTarget(dict, targetLength);
-		var options = new VcEncoderOptions { MaxBufferSize = maxBufferSize };
+		var options = new VcdiffEncoderOptions { MaxWindowSizeMiB = maxWindowSizeMiB };
 
 		var expected = EncodeBaseline(dict, target, options);
 
-		var window = Math.Max(1, maxBufferSize) * MiB;
+		var window = Math.Max(1, maxWindowSizeMiB) * MiB;
 		var windows = WindowTargetLengths(expected);
 		Assert.Equal((targetLength + window - 1) / window, windows.Length);
 		for (var i = 0; i < windows.Length; i++)
@@ -281,13 +281,13 @@ public class ReviewEncoderTests
 	{
 		var dict = MakeDictionary(32 * 1024);
 		var target = MakeTarget(dict, targetLength);
-		var options = new VcEncoderOptions();
-		var expected = EncodeBaseline(dict, target, options, false, ChecksumFormat.SDCH);
+		var options = new VcdiffEncoderOptions();
+		var expected = EncodeBaseline(dict, target, options, false, WindowChecksumFormat.Sdch);
 
 		using var trickle = new TrickleStream(target);
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(new MemoryStream(dict), trickle, delta, options);
-		Assert.Equal(VcDiffResult.SUCCESS, await enc.EncodeAsync(false, ChecksumFormat.SDCH));
+		using var enc = new VcdiffEncoder(new MemoryStream(dict), trickle, delta, options);
+		Assert.Equal(VcdiffResult.Success, await enc.EncodeAsync(false, WindowChecksumFormat.Sdch));
 		Assert.Equal(expected, delta.ToArray());
 	}
 
@@ -296,7 +296,7 @@ public class ReviewEncoderTests
 	{
 		var dict = MakeDictionary(8 * 1024);
 		var target = MakeTarget(dict, 10 * 1024);
-		var options = new VcEncoderOptions();
+		var options = new VcdiffEncoderOptions();
 		var expected = EncodeBaseline(dict, target, options);
 
 		using var tgt = new MemoryStream(target);
@@ -305,11 +305,11 @@ public class ReviewEncoderTests
 	}
 
 	[Fact]
-	public void MaxBufferSize_Overflow_Throws()
+	public void MaxWindowSizeMiB_Overflow_Throws()
 	{
 		// 2048 MiB overflows the int window size; it must not silently degrade to tiny windows.
 		Assert.Throws<VcdiffException>(() =>
-			new VcEncoder(new MemoryStream(new byte[16]), new MemoryStream(new byte[16]), new MemoryStream(), new VcEncoderOptions { MaxBufferSize = 2048 }));
+			new VcdiffEncoder(new MemoryStream(new byte[16]), new MemoryStream(new byte[16]), new MemoryStream(), new VcdiffEncoderOptions { MaxWindowSizeMiB = 2048 }));
 	}
 
 	// ------------------------------------------------------------------ lifetime
@@ -326,12 +326,12 @@ public class ReviewEncoderTests
 
 		using var tgt = new MemoryStream(target);
 		using var delta1 = new MemoryStream();
-		var enc = new VcEncoder(src, tgt, delta1, new VcEncoderOptions());
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+		var enc = new VcdiffEncoder(src, tgt, delta1, new VcdiffEncoderOptions());
+		Assert.Equal(VcdiffResult.Success, enc.Encode());
 		var first = delta1.ToArray();
 
 		delta1.SetLength(0);
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+		Assert.Equal(VcdiffResult.Success, enc.Encode());
 		Assert.Equal(first, delta1.ToArray());
 
 		enc.Dispose();
@@ -340,23 +340,23 @@ public class ReviewEncoderTests
 	}
 
 	[Fact]
-	public void CallerOwnedRollingHash_IsNotDisposed()
+	public void CallerOwnedRabinKarpHash_IsNotDisposed()
 	{
 		var dict = MakeDictionary(8 * 1024);
 		var target = MakeTarget(dict, 20 * 1024);
-		using var hasher = new RollingHash(16);
+		using var hasher = new RabinKarpHash(16);
 		byte[] first;
 		using (var delta = new MemoryStream())
-		using (var enc = new VcEncoder(new MemoryStream(dict), new MemoryStream(target), delta, new VcEncoderOptions { RollingHash = hasher }))
+		using (var enc = new VcdiffEncoder(new MemoryStream(dict), new MemoryStream(target), delta, new VcdiffEncoderOptions { RabinKarpHash = hasher }))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+			Assert.Equal(VcdiffResult.Success, enc.Encode());
 			first = delta.ToArray();
 		}
 
 		using (var delta = new MemoryStream())
-		using (var enc = new VcEncoder(new MemoryStream(dict), new MemoryStream(target), delta, new VcEncoderOptions { RollingHash = hasher }))
+		using (var enc = new VcdiffEncoder(new MemoryStream(dict), new MemoryStream(target), delta, new VcdiffEncoderOptions { RabinKarpHash = hasher }))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+			Assert.Equal(VcdiffResult.Success, enc.Encode());
 			Assert.Equal(first, delta.ToArray());
 		}
 	}

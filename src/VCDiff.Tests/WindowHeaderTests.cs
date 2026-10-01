@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Security.Cryptography;
 using VCDiff.Decoders;
 using VCDiff.Includes;
@@ -20,8 +20,8 @@ public class WindowHeaderTests
 
 		using var outputStream = new MemoryStream();
 
-		var decoder = new VcDecoder(inputStream, deltaStream, outputStream);
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
+		var decoder = new VcdiffDecoder(inputStream, deltaStream, outputStream);
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out var bytesWritten));
 		outputStream.Position = 0;
 		var outputHash = md5.ComputeHash(outputStream);
 		Assert.Equal(originalHash, outputHash);

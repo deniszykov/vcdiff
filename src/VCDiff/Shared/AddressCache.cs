@@ -124,20 +124,20 @@ internal sealed class AddressCache
 	///     <paramref name="data" /> at <paramref name="index" /> (advanced past it), and updates the cache.
 	/// </summary>
 	/// <returns>
-	///     The address; <paramref name="status" /> is <see cref="VcDiffResult.EOD" /> when <paramref name="data" /> ends
-	///     before the encoded value and <see cref="VcDiffResult.ERROR" /> when the address is invalid (it must be below
+	///     The address; <paramref name="status" /> is <see cref="ParseResult.NeedMoreData" /> when <paramref name="data" /> ends
+	///     before the encoded value and <see cref="ParseResult.Error" /> when the address is invalid (it must be below
 	///     <paramref name="here" />). The cache is only updated on success.
 	/// </returns>
-	public long DecodeAddress(long here, byte mode, ReadOnlySpan<byte> data, ref int index, out VcDiffResult status)
+	public long DecodeAddress(long here, byte mode, ReadOnlySpan<byte> data, ref int index, out ParseResult status)
 	{
-		status = VcDiffResult.SUCCESS;
+		status = ParseResult.Success;
 
 		long decoded;
 		if (this.IsSameMode(mode))
 		{
 			if (index >= data.Length)
 			{
-				status = VcDiffResult.EOD;
+				status = ParseResult.NeedMoreData;
 				return 0;
 			}
 
@@ -146,10 +146,10 @@ internal sealed class AddressCache
 		}
 		else
 		{
-			var parsed = VarIntBe.ParseInt32(data.Slice(index), out var vb);
-			if (parsed < 0)
+			var result = VarIntBe.TryParseInt32(data.Slice(index), out var parsed, out var vb);
+			if (result != ParseResult.Success)
 			{
-				status = (VcDiffResult)parsed; // ERROR or EOD
+				status = result;
 				return 0;
 			}
 
@@ -162,14 +162,14 @@ internal sealed class AddressCache
 				decoded = this._nearCache[mode - FIRST_NEAR] + parsed;
 			else
 			{
-				status = VcDiffResult.ERROR;
+				status = ParseResult.Error;
 				return 0;
 			}
 		}
 
 		if (decoded < 0 || decoded >= here)
 		{
-			status = VcDiffResult.ERROR;
+			status = ParseResult.Error;
 			return 0;
 		}
 

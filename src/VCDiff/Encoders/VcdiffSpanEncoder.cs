@@ -25,7 +25,7 @@ namespace VCDiff.Encoders;
 ///         <see cref="Dispose" /> is called.
 ///     </para>
 /// </remarks>
-public sealed class VcDiffEncoder : IDisposable
+public sealed class VcdiffSpanEncoder : IDisposable
 {
 	private readonly ChunkEncoder _chunker;
 	private readonly RecyclableMemoryStream _pending;
@@ -49,9 +49,9 @@ public sealed class VcDiffEncoder : IDisposable
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
     ///     instance.
     /// </param>
-    /// <param name="options">The encoder options. See <see cref="VcEncoderOptions" />.</param>
-    public VcDiffEncoder(ReadOnlySequence<byte> dictionary, VcEncoderOptions? options = null)
-		: this(new ReadOnlySequenceSource(dictionary), options)
+    /// <param name="options">The encoder options. See <see cref="VcdiffEncoderOptions" />.</param>
+    public VcdiffSpanEncoder(ReadOnlySequence<byte> dictionary, VcdiffEncoderOptions? options = null)
+		: this(new SequenceSourceReader(dictionary), options)
 	{
 	}
 
@@ -62,14 +62,14 @@ public sealed class VcDiffEncoder : IDisposable
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
     ///     instance.
     /// </param>
-    /// <param name="options">The encoder options. See <see cref="VcEncoderOptions" />.</param>
-    public VcDiffEncoder(IDictionaryReader dictionary, VcEncoderOptions? options = null)
+    /// <param name="options">The encoder options. See <see cref="VcdiffEncoderOptions" />.</param>
+    public VcdiffSpanEncoder(ISourceReader dictionary, VcdiffEncoderOptions? options = null)
 	{
-		options ??= new VcEncoderOptions();
+		options ??= new VcdiffEncoderOptions();
 		this._pool = options.BytePoolOrDefault;
 
 		var interleaved = options.Interleaved;
-		var checksumFormat = options.ChecksumFormat;
+		var checksumFormat = options.WindowChecksumFormat;
 		EncoderSession.ValidateFormat(interleaved, checksumFormat);
 
 		this._session = new EncoderSession(dictionary, options);
@@ -77,7 +77,7 @@ public sealed class VcDiffEncoder : IDisposable
 		{
 			this._windowSize = this._session.WindowSize;
 			this._chunker = this._session.CreateChunkEncoder(interleaved, checksumFormat);
-			this._pending = options.MemoryStreamManagerOrDefault.GetStream(nameof(VcDiffEncoder));
+			this._pending = options.MemoryStreamManagerOrDefault.GetStream(nameof(VcdiffSpanEncoder));
 			this._pending.Write(EncoderSession.GetFileHeader(interleaved, checksumFormat).Span);
 		}
 		catch
@@ -100,7 +100,7 @@ public sealed class VcDiffEncoder : IDisposable
     public OperationStatus Encode(ReadOnlySpan<byte> input, Span<byte> output, out int inputConsumed, out int outputWritten, bool isFinal)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(VcDiffEncoder));
+			throw new ObjectDisposedException(nameof(VcdiffSpanEncoder));
 
 		inputConsumed = 0;
 		outputWritten = 0;

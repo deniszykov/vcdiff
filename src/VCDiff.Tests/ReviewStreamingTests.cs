@@ -63,7 +63,7 @@ public class ReviewStreamingTests
 		}
 	}
 
-	private static byte[] EncodeRandom(VcDiffEncoder enc, byte[] target, Random rnd)
+	private static byte[] EncodeRandom(VcdiffSpanEncoder enc, byte[] target, Random rnd)
 	{
 		var result = new MemoryStream();
 		var pos = 0;
@@ -93,7 +93,7 @@ public class ReviewStreamingTests
 		return result.ToArray();
 	}
 
-	private static byte[] DecodeRandom(VcDiffDecoder dec, byte[] delta, Random rnd)
+	private static byte[] DecodeRandom(VcdiffSpanDecoder dec, byte[] delta, Random rnd)
 	{
 		var result = new MemoryStream();
 		var pos = 0;
@@ -126,7 +126,7 @@ public class ReviewStreamingTests
 	}
 
 	// Reference: target fed in small fixed chunks, so every window is staged.
-	private static byte[] EncodeStaged(VcDiffEncoder enc, byte[] target)
+	private static byte[] EncodeStaged(VcdiffSpanEncoder enc, byte[] target)
 	{
 		var result = new MemoryStream();
 		var output = new byte[1 << 16];
@@ -151,22 +151,22 @@ public class ReviewStreamingTests
 		using var src = new MemoryStream(dict);
 		using var dlt = new MemoryStream(delta);
 		using var output = new MemoryStream();
-		using var dec = new VcDecoder(src, dlt, output);
-		Assert.Equal(VcDiffResult.SUCCESS, dec.Decode(out _));
+		using var dec = new VcdiffDecoder(src, dlt, output);
+		Assert.Equal(VcdiffResult.Success, dec.Decode(out _));
 		return output.ToArray();
 	}
 
-	public static TheoryData<int, bool, ChecksumFormat> Cases()
+	public static TheoryData<int, bool, WindowChecksumFormat> Cases()
 	{
-		var data = new TheoryData<int, bool, ChecksumFormat>();
+		var data = new TheoryData<int, bool, WindowChecksumFormat>();
 		for (var seed = 1; seed <= 20; seed++)
 		{
 			switch (seed % 4)
 			{
-				case 0: data.Add(seed, false, ChecksumFormat.None); break;
-				case 1: data.Add(seed, false, ChecksumFormat.SDCH); break;
-				case 2: data.Add(seed, false, ChecksumFormat.Xdelta3); break;
-				default: data.Add(seed, true, ChecksumFormat.SDCH); break;
+				case 0: data.Add(seed, false, WindowChecksumFormat.None); break;
+				case 1: data.Add(seed, false, WindowChecksumFormat.Sdch); break;
+				case 2: data.Add(seed, false, WindowChecksumFormat.Xdelta3); break;
+				default: data.Add(seed, true, WindowChecksumFormat.Sdch); break;
 			}
 		}
 
@@ -188,13 +188,13 @@ public class ReviewStreamingTests
 		{
 			var rnd = new Random(seed);
 			var dictionary = seed % 2 == 0 ? RandomSegmented(dict, rnd) : new ReadOnlySequence<byte>(dict);
-			using var dec = new VcDiffDecoder(dictionary);
+			using var dec = new VcdiffSpanDecoder(dictionary);
 			Assert.Equal(expected, DecodeRandom(dec, delta, rnd));
 		}
 	}
 
 	[Theory, MemberData(nameof(Cases))]
-	public void RandomChunks_RoundTrip_MatchesStaged(int seed, bool interleaved, ChecksumFormat checksumFormat)
+	public void RandomChunks_RoundTrip_MatchesStaged(int seed, bool interleaved, WindowChecksumFormat checksumFormat)
 	{
 		var rnd = new Random(seed);
 		var dict = new byte[8192];
@@ -206,19 +206,19 @@ public class ReviewStreamingTests
 		for (var i = 0; i < target.Length / 400; i++)
 			target[rnd.Next(target.Length)] = (byte)rnd.Next(256);
 
-		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = checksumFormat };
+		var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = checksumFormat };
 
-		using var staged = new VcDiffEncoder(new ReadOnlySequence<byte>(dict), options);
+		using var staged = new VcdiffSpanEncoder(new ReadOnlySequence<byte>(dict), options);
 		var expected = EncodeStaged(staged, target);
 
 		var dictionary = seed % 2 == 0 ? RandomSegmented(dict, rnd) : new ReadOnlySequence<byte>(dict);
-		using var enc = new VcDiffEncoder(dictionary, options);
+		using var enc = new VcdiffSpanEncoder(dictionary, options);
 		var delta = EncodeRandom(enc, target, rnd);
 		Assert.Equal(expected, delta);
 
 		Assert.Equal(target, LegacyDecode(dict, delta));
 
-		using var dec = new VcDiffDecoder(dictionary);
+		using var dec = new VcdiffSpanDecoder(dictionary);
 		Assert.Equal(target, DecodeRandom(dec, delta, rnd));
 	}
 }

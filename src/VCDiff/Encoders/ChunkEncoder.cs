@@ -15,10 +15,10 @@ namespace VCDiff.Encoders;
 /// </summary>
 internal sealed class ChunkEncoder : IDisposable
 {
-	private readonly ChecksumFormat checksumFormat;
+	private readonly WindowChecksumFormat checksumFormat;
 
 	private readonly BlockHash dictionary;
-	private readonly RollingHash hasher;
+	private readonly RabinKarpHash hasher;
 	private readonly int minMatchSize;
 	private readonly WindowEncoder windowEncoder;
 	private bool disposed;
@@ -34,8 +34,8 @@ internal sealed class ChunkEncoder : IDisposable
 	(
 		BlockHash dictionary,
 		long dictionarySize,
-		RollingHash hash,
-		ChecksumFormat checksumFormat,
+		RabinKarpHash hash,
+		WindowChecksumFormat checksumFormat,
 		bool interleaved,
 		int minMatchSize,
 		RecyclableMemoryStreamManager memoryStreamManager)
@@ -55,8 +55,8 @@ internal sealed class ChunkEncoder : IDisposable
     public unsafe void EncodeChunk(ReadOnlySpan<byte> window, Stream outputStream)
 	{
 		uint checksum = this.checksumFormat switch {
-			ChecksumFormat.SDCH => Adler32.Hash(0, window),
-			ChecksumFormat.Xdelta3 => Adler32.Hash(1, window),
+			WindowChecksumFormat.Sdch => Adler32.Hash(0, window),
+			WindowChecksumFormat.Xdelta3 => Adler32.Hash(1, window),
 			_ => 0
 		};
 

@@ -258,14 +258,14 @@ public class ReviewCompressionTests
 		using var src = new MemoryStream(source, false);
 		using var deltaStream = trickleSeed < 0 ? (Stream)new MemoryStream(delta, false) : new TrickleStream(new MemoryStream(delta, false), trickleSeed);
 		using var output = new MemoryStream();
-		using var decoder = new VcDecoder(src, deltaStream, output);
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out _));
+		using var decoder = new VcdiffDecoder(src, deltaStream, output);
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out _));
 		return output.ToArray();
 	}
 
 	private static byte[] DecodeStreaming(byte[] source, byte[] delta, int inChunk, int outChunk)
 	{
-		using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(source));
+		using var dec = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(source));
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
 		var pos = 0;

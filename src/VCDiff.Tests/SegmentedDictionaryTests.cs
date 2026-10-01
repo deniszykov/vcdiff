@@ -125,9 +125,9 @@ public class SegmentedDictionaryTests
 		return target.ToArray();
 	}
 
-	private static byte[] Encode(ReadOnlySequence<byte> dict, byte[] target, VcEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
+	private static byte[] Encode(ReadOnlySequence<byte> dict, byte[] target, VcdiffEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
 	{
-		using var enc = new VcDiffEncoder(dict, options);
+		using var enc = new VcdiffSpanEncoder(dict, options);
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
 		var input = target.AsSpan();
@@ -146,7 +146,7 @@ public class SegmentedDictionaryTests
 
 	private static byte[] Decode(ReadOnlySequence<byte> dict, byte[] delta, int inChunk = 50000, int outChunk = 4096)
 	{
-		using var dec = new VcDiffDecoder(dict);
+		using var dec = new VcdiffSpanDecoder(dict);
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
 		var input = delta.AsSpan();
@@ -165,13 +165,13 @@ public class SegmentedDictionaryTests
 		return result.ToArray();
 	}
 
-	private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, ChecksumFormat checksumFormat, int blockSize)
+	private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, WindowChecksumFormat checksumFormat, int blockSize)
 	{
 		using var src = new MemoryStream(dict);
 		using var tgt = new MemoryStream(target);
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(src, tgt, delta, blockSize: blockSize);
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode(interleaved, checksumFormat));
+		using var enc = new VcdiffEncoder(src, tgt, delta, blockSize: blockSize);
+		Assert.Equal(VcdiffResult.Success, enc.Encode(interleaved, checksumFormat));
 		return delta.ToArray();
 	}
 
@@ -183,15 +183,15 @@ public class SegmentedDictionaryTests
 	// Deltas produced by the contiguous dictionary implementation (before dictionaries could be segmented).
 	private static readonly Dictionary<string, string> Golden = new() {
 		{ "False/None/16", "43076B0B7EBA0F3AAFA13E849844318B5D2E49CAB3EF6127FB5C9D9B972675F7" },
-		{ "False/SDCH/16", "3A09E6CB91FBC611D6382180F550BD75CB7D9F12C5174A4ED54196F201F33A6F" },
+		{ "False/Sdch/16", "3A09E6CB91FBC611D6382180F550BD75CB7D9F12C5174A4ED54196F201F33A6F" },
 		{ "False/Xdelta3/32", "BB69E1BCACE6D50F90FBE2CB84F141F24CEC2C5F5A828AA65C64DB8E8B43EAD6" },
 		{ "True/None/16", "BD70E4641D87C1FF2824CB3967CD717F400E0D191C4B6A4F7D28F281BEFFF463" },
-		{ "True/SDCH/32", "C2C4A694A27C3DAA16A7A0D23940F9CE18995B9C7B9D7DCF714F691083FD2641" }
+		{ "True/Sdch/32", "C2C4A694A27C3DAA16A7A0D23940F9CE18995B9C7B9D7DCF714F691083FD2641" }
 	};
 
-	[Theory, InlineData(false, ChecksumFormat.None, 16), InlineData(false, ChecksumFormat.SDCH, 16), InlineData(false, ChecksumFormat.Xdelta3, 32),
-	InlineData(true, ChecksumFormat.None, 16), InlineData(true, ChecksumFormat.SDCH, 32)]
-	public void Encoder_Output_DoesNotDependOnSegmentation(bool interleaved, ChecksumFormat checksumFormat, int blockSize)
+	[Theory, InlineData(false, WindowChecksumFormat.None, 16), InlineData(false, WindowChecksumFormat.Sdch, 16), InlineData(false, WindowChecksumFormat.Xdelta3, 32),
+	InlineData(true, WindowChecksumFormat.None, 16), InlineData(true, WindowChecksumFormat.Sdch, 32)]
+	public void Encoder_Output_DoesNotDependOnSegmentation(bool interleaved, WindowChecksumFormat checksumFormat, int blockSize)
 	{
 		var dict = MakeDictionary(300_000, 11);
 		var target = MakeTarget(dict, 1_300_000, 12);
@@ -202,7 +202,7 @@ public class SegmentedDictionaryTests
 
 		foreach (var layout in Layouts())
 		{
-			var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = checksumFormat, BlockSize = blockSize };
+			var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = checksumFormat, BlockSize = blockSize };
 			var delta = Encode(Split(dict, (int[])layout[0]), target, options);
 			Assert.Equal(golden, Hash(delta));
 		}
@@ -216,7 +216,7 @@ public class SegmentedDictionaryTests
 
 		foreach (var interleaved in new[] { false, true })
 		{
-			var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
+			var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = WindowChecksumFormat.Sdch };
 			var delta = Encode(new ReadOnlySequence<byte>(dict), target, options);
 
 			Assert.Equal(target, Decode(Split(dict, layout), delta));
@@ -272,10 +272,10 @@ public class SegmentedDictionaryTests
 
 		foreach (var interleaved in new[] { false, true })
 		{
-			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
+			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcdiffEncoderOptions { Interleaved = interleaved });
 			Assert.True(delta.Length > 2_500_000);
 
-			using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
+			using var dec = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(dict));
 			var outBuf = new byte[1024];
 
 			// The whole delta is offered at once, but only a little output space is available.
@@ -311,7 +311,7 @@ public class SegmentedDictionaryTests
 
 		foreach (var interleaved in new[] { false, true })
 		{
-			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcEncoderOptions { Interleaved = interleaved });
+			var delta = Encode(new ReadOnlySequence<byte>(dict), target, new VcdiffEncoderOptions { Interleaved = interleaved });
 			var rnd = new Random(63);
 			var outBuf = new byte[200_000];
 
@@ -321,7 +321,7 @@ public class SegmentedDictionaryTests
 				var corrupt = (byte[])delta.Clone();
 				corrupt[rnd.Next(5, corrupt.Length)] ^= (byte)rnd.Next(1, 256);
 
-				using var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(dict));
+				using var dec = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(dict));
 				var status = dec.Decode(corrupt, outBuf, out _, out _, true);
 				Assert.True(status == OperationStatus.InvalidData || status == OperationStatus.Done, status.ToString());
 			}
@@ -336,20 +336,20 @@ public class SegmentedDictionaryTests
 
 		// The reader holds the sequence by reference and reads through GC-safe spans, so it neither copies
 		// nor pins the dictionary (pinning was only needed by the old raw-pointer implementation).
-		using (var enc = new VcDiffEncoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
+		using (var enc = new VcdiffSpanEncoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
 
 		Assert.Equal(0, owner.Pins);
 
-		using (var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
+		using (var dec = new VcdiffSpanDecoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
 
 		Assert.Equal(0, owner.Pins);
 	}
 
 	[Fact]
-	public void ReadOnlySequenceSource_ReleaseAction_IsInvokedOnceOnDispose()
+	public void SequenceSourceReader_ReleaseAction_IsInvokedOnceOnDispose()
 	{
 		var releases = 0;
-		var source = new ReadOnlySequenceSource(new ReadOnlySequence<byte>(new byte[16]), () => releases++);
+		var source = new SequenceSourceReader(new ReadOnlySequence<byte>(new byte[16]), () => releases++);
 
 		Assert.Equal(0, releases);
 		source.Dispose();
@@ -370,9 +370,9 @@ public class SegmentedDictionaryTests
 		using var source = new MemoryStream(dict, false);
 		using var tgt = new MemoryStream(target);
 		using var delta = new MemoryStream();
-		using (var enc = new VcEncoder(source, tgt, delta))
-			Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
+		using (var enc = new VcdiffEncoder(source, tgt, delta))
+			Assert.Equal(VcdiffResult.Success, enc.Encode());
 
-		Assert.Equal(LegacyEncode(dict, target, false, ChecksumFormat.None, 16), delta.ToArray());
+		Assert.Equal(LegacyEncode(dict, target, false, WindowChecksumFormat.None, 16), delta.ToArray());
 	}
 }

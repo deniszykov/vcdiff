@@ -40,7 +40,7 @@ public class StreamingDiffTests
 		return target;
 	}
 
-	private static byte[] EncodeStreaming(VcDiffEncoder enc, byte[] target, int inChunk, int outChunk)
+	private static byte[] EncodeStreaming(VcdiffSpanEncoder enc, byte[] target, int inChunk, int outChunk)
 	{
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
@@ -82,7 +82,7 @@ public class StreamingDiffTests
 		return result.ToArray();
 	}
 
-	private static byte[] DecodeStreaming(VcDiffDecoder dec, byte[] delta, int inChunk, int outChunk)
+	private static byte[] DecodeStreaming(VcdiffSpanDecoder dec, byte[] delta, int inChunk, int outChunk)
 	{
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
@@ -120,13 +120,13 @@ public class StreamingDiffTests
 		return result.ToArray();
 	}
 
-	private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, ChecksumFormat checksumFormat, int maxBufferSize = 1, int blockSize = 16)
+	private static byte[] LegacyEncode(byte[] dict, byte[] target, bool interleaved, WindowChecksumFormat checksumFormat, int maxWindowSizeMiB = 1, int blockSize = 16)
 	{
 		using var src = new MemoryStream(dict);
 		using var tgt = new MemoryStream(target);
 		using var delta = new MemoryStream();
-		using var enc = new VcEncoder(src, tgt, delta, maxBufferSize, blockSize);
-		Assert.Equal(VcDiffResult.SUCCESS, enc.Encode(interleaved, checksumFormat));
+		using var enc = new VcdiffEncoder(src, tgt, delta, maxWindowSizeMiB, blockSize);
+		Assert.Equal(VcdiffResult.Success, enc.Encode(interleaved, checksumFormat));
 		return delta.ToArray();
 	}
 
@@ -135,8 +135,8 @@ public class StreamingDiffTests
 		using var src = new MemoryStream(dict);
 		using var dlt = new MemoryStream(delta);
 		using var output = new MemoryStream();
-		using var dec = new VcDecoder(src, dlt, output);
-		Assert.Equal(VcDiffResult.SUCCESS, dec.Decode(out _));
+		using var dec = new VcdiffDecoder(src, dlt, output);
+		Assert.Equal(VcdiffResult.Success, dec.Decode(out _));
 		return output.ToArray();
 	}
 
@@ -148,10 +148,10 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict));
+		using var enc = new VcdiffSpanEncoder(Seq(dict));
 		var delta = EncodeStreaming(enc, target, inChunk, outChunk);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, inChunk, outChunk);
 
 		Assert.Equal(target, result);
@@ -163,10 +163,10 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict), new VcEncoderOptions { ChecksumFormat = ChecksumFormat.SDCH });
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { WindowChecksumFormat = WindowChecksumFormat.Sdch });
 		var delta = EncodeStreaming(enc, target, inChunk, outChunk);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, inChunk, outChunk);
 
 		Assert.Equal(target, result);
@@ -178,10 +178,10 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict), new VcEncoderOptions { ChecksumFormat = ChecksumFormat.Xdelta3 });
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { WindowChecksumFormat = WindowChecksumFormat.Xdelta3 });
 		var delta = EncodeStreaming(enc, target, inChunk, outChunk);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, inChunk, outChunk);
 
 		Assert.Equal(target, result);
@@ -193,10 +193,10 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict), new VcEncoderOptions { Interleaved = true });
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { Interleaved = true });
 		var delta = EncodeStreaming(enc, target, inChunk, outChunk);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, inChunk, outChunk);
 
 		Assert.Equal(target, result);
@@ -210,7 +210,7 @@ public class StreamingDiffTests
 		var expected = File.ReadAllBytes(Path.Combine("patches", "b.test"));
 		var delta = File.ReadAllBytes(Path.Combine("patches", patchFile));
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, 64, 64);
 
 		Assert.Equal(expected, result);
@@ -234,7 +234,7 @@ public class StreamingDiffTests
 		var expected = File.ReadAllBytes(Path.Combine("patches", "win_indicator_zero.test"));
 		var delta = File.ReadAllBytes(Path.Combine("patches", "win_indicator_zero.xdelta"));
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, 64, 64);
 
 		Assert.Equal(expected, result);
@@ -246,8 +246,8 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		var delta = LegacyEncode(dict, target, false, ChecksumFormat.SDCH);
-		using var dec = new VcDiffDecoder(Seq(dict));
+		var delta = LegacyEncode(dict, target, false, WindowChecksumFormat.Sdch);
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, 128, 128);
 
 		Assert.Equal(target, result);
@@ -261,12 +261,12 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict));
+		using var enc = new VcdiffSpanEncoder(Seq(dict));
 		var delta = EncodeStreaming(enc, target, 1024, 1024);
 
 		// Feed a truncated delta and mark it final.
 		var truncated = delta.AsSpan(0, delta.Length / 2).ToArray();
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var outBuf = new byte[1024];
 		var status = OperationStatus.Done;
 		foreach (var chunk in Chunk(truncated, 32))
@@ -289,9 +289,9 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict));
+		using var enc = new VcdiffSpanEncoder(Seq(dict));
 		var delta = EncodeStreaming(enc, target, 512, 512);
-		var expected = LegacyEncode(dict, target, false, ChecksumFormat.None);
+		var expected = LegacyEncode(dict, target, false, WindowChecksumFormat.None);
 
 		Assert.Equal(expected, delta);
 	}
@@ -299,21 +299,21 @@ public class StreamingDiffTests
 	// ------------------------------------------------------------------ dictionary loading
 
 	[Fact]
-	public void ReadDictionary_ProducesSequence_And_RoundTrips()
+	public void Read_ProducesSequence_And_RoundTrips()
 	{
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
 		using var src = new MemoryStream(dict);
-		using var dictStream = VcDiff.ReadDictionary(src);
+		using var dictStream = VcdiffDictionary.Read(src);
 		var sequence = dictStream.GetReadOnlySequence();
 
 		Assert.Equal(dict, sequence.ToArray());
 
-		using var enc = new VcDiffEncoder(sequence);
+		using var enc = new VcdiffSpanEncoder(sequence);
 		var delta = EncodeStreaming(enc, target, 512, 512);
 
-		using var dec = new VcDiffDecoder(sequence);
+		using var dec = new VcdiffSpanDecoder(sequence);
 		var result = DecodeStreaming(dec, delta, 512, 512);
 
 		Assert.Equal(target, result);
@@ -324,10 +324,10 @@ public class StreamingDiffTests
 	{
 		var dict = MakeDictionary();
 
-		using var enc = new VcDiffEncoder(Seq(dict));
+		using var enc = new VcdiffSpanEncoder(Seq(dict));
 		var delta = EncodeStreaming(enc, Array.Empty<byte>(), 1, 1);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, 1, 1);
 
 		Assert.Empty(result);
@@ -346,10 +346,10 @@ public class StreamingDiffTests
 		dict.CopyTo(target, 0);
 		rnd.NextBytes(target.AsSpan(dict.Length));
 
-		using var enc = new VcDiffEncoder(Seq(dict), new VcEncoderOptions { ChecksumFormat = ChecksumFormat.SDCH });
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { WindowChecksumFormat = WindowChecksumFormat.Sdch });
 		var delta = EncodeStreaming(enc, target, 70000, 70000);
 
-		using var dec = new VcDiffDecoder(Seq(dict));
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
 		var result = DecodeStreaming(dec, delta, 70000, 70000);
 
 		Assert.Equal(target, result);
@@ -361,7 +361,7 @@ public class StreamingDiffTests
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
 
-		using var enc = new VcDiffEncoder(Seq(dict), new VcEncoderOptions { ChecksumFormat = ChecksumFormat.Xdelta3 });
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { WindowChecksumFormat = WindowChecksumFormat.Xdelta3 });
 		var delta = EncodeStreaming(enc, target, 1024, 1024);
 		var result = LegacyDecode(dict, delta);
 
@@ -399,7 +399,7 @@ public class StreamingDiffTests
 		return first == null ? ReadOnlySequence<byte>.Empty : new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
 	}
 
-	private static byte[] EncodeWhole(VcDiffEncoder enc, byte[] target)
+	private static byte[] EncodeWhole(VcdiffSpanEncoder enc, byte[] target)
 	{
 		var outBuf = new byte[target.Length * 2 + 1024];
 		var result = new MemoryStream();
@@ -423,18 +423,18 @@ public class StreamingDiffTests
 	{
 		var dict = MakeDictionary();
 		var target = MakeTarget(dict);
-		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = interleaved ? ChecksumFormat.SDCH : ChecksumFormat.None };
+		var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = interleaved ? WindowChecksumFormat.Sdch : WindowChecksumFormat.None };
 
-		using var reference = new VcDiffEncoder(Seq(dict), options);
+		using var reference = new VcdiffSpanEncoder(Seq(dict), options);
 		var expected = EncodeStreaming(reference, target, 4096, 4096);
 
 		foreach (var dictionary in new[] { Segmented(dict, 1, 7, 64, 3, 1000), Segmented(dict, 256), Segmented(dict, 100) })
 		{
-			using var enc = new VcDiffEncoder(dictionary, options);
+			using var enc = new VcdiffSpanEncoder(dictionary, options);
 			var delta = EncodeStreaming(enc, target, inChunk, outChunk);
 			Assert.Equal(expected, delta);
 
-			using var dec = new VcDiffDecoder(dictionary);
+			using var dec = new VcdiffSpanDecoder(dictionary);
 			var result = DecodeStreaming(dec, delta, inChunk, outChunk);
 			Assert.Equal(target, result);
 		}
@@ -453,19 +453,19 @@ public class StreamingDiffTests
 		for (var i = 0; i < 5000; i++)
 			target[rnd.Next(target.Length)] = (byte)rnd.Next(256);
 
-		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
+		var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = WindowChecksumFormat.Sdch };
 
 		// Whole windows straight from the caller's span vs. windows staged from tiny chunks.
-		using var wholeEncoder = new VcDiffEncoder(Seq(dict), options);
+		using var wholeEncoder = new VcdiffSpanEncoder(Seq(dict), options);
 		var whole = EncodeWhole(wholeEncoder, target);
-		using var chunkedEncoder = new VcDiffEncoder(Segmented(dict, 7, 4096), options);
+		using var chunkedEncoder = new VcdiffSpanEncoder(Segmented(dict, 7, 4096), options);
 		var chunked = EncodeStreaming(chunkedEncoder, target, 7, 5);
 		Assert.Equal(whole, chunked);
 
 		// Whole delta and a large output (decoded in place) vs. tiny input and output chunks.
-		using var wholeDecoder = new VcDiffDecoder(Seq(dict));
+		using var wholeDecoder = new VcdiffSpanDecoder(Seq(dict));
 		Assert.Equal(target, DecodeStreaming(wholeDecoder, whole, whole.Length, target.Length));
-		using var chunkedDecoder = new VcDiffDecoder(Segmented(dict, 1, 7, 64));
+		using var chunkedDecoder = new VcdiffSpanDecoder(Segmented(dict, 1, 7, 64));
 		Assert.Equal(target, DecodeStreaming(chunkedDecoder, whole, 7, 3));
 	}
 
@@ -508,12 +508,12 @@ public class StreamingDiffTests
 	}
 
 	[Fact]
-	public void ReadDictionary_NonSeekableStream_SpansBlocks()
+	public void Read_NonSeekableStream_SpansBlocks()
 	{
 		var data = new byte[300 * 1024 + 17];
 		new Random(3).NextBytes(data);
 
-		using var dictStream = VcDiff.ReadDictionary(new TrickleStream(data));
+		using var dictStream = VcdiffDictionary.Read(new TrickleStream(data));
 		Assert.Equal(0, dictStream.Position);
 		Assert.Equal(data.Length, dictStream.Length);
 		Assert.Equal(data, dictStream.GetReadOnlySequence().ToArray());

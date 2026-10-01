@@ -14,7 +14,7 @@ namespace VCDiff.Shared;
 ///     straight into the destination. Offsets are absolute stream positions (0 .. <see cref="Stream.Length" />).
 ///     The stream is not owned and is not disposed.
 /// </summary>
-public sealed unsafe class StreamDictionaryReader : IDictionaryReader
+public sealed unsafe class StreamSourceReader : ISourceReader
 {
 	private const int CACHE_SIZE = 32 * 1024;
 	private const int MATCH_CHUNK_SIZE = 4096;
@@ -29,7 +29,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 
 	public long Length { get; }
 
-	public StreamDictionaryReader(Stream stream, ArrayPool<byte> pool, RecyclableMemoryStream bufferStream)
+	public StreamSourceReader(Stream stream, ArrayPool<byte> pool, RecyclableMemoryStream bufferStream)
 	{
 		if (!stream.CanSeek)
 			throw VcdiffException.StreamIsNotSeekable();
@@ -43,7 +43,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public void CopyTo(long offset, Span<byte> destination)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(StreamDictionaryReader));
+			throw new ObjectDisposedException(nameof(StreamSourceReader));
 
 		if (offset < 0 || offset + destination.Length > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));
@@ -86,7 +86,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public bool SequenceEqual(long offset, byte* other, int length)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(StreamDictionaryReader));
+			throw new ObjectDisposedException(nameof(StreamSourceReader));
 
 		if (offset < 0 || length < 0 || offset + length > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));
@@ -119,7 +119,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public long MatchForward(long offset, byte* other, long maxBytes)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(StreamDictionaryReader));
+			throw new ObjectDisposedException(nameof(StreamSourceReader));
 
 		if (maxBytes < 0)
 			throw new ArgumentOutOfRangeException(nameof(maxBytes));
@@ -149,7 +149,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public long MatchBackward(long offset, byte* otherEnd, long maxBytes)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(StreamDictionaryReader));
+			throw new ObjectDisposedException(nameof(StreamSourceReader));
 
 		if (maxBytes < 0)
 			throw new ArgumentOutOfRangeException(nameof(maxBytes));
@@ -175,7 +175,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public ReadOnlySequence<byte> Read(long offset, long bytesToRead)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(StreamDictionaryReader));
+			throw new ObjectDisposedException(nameof(StreamSourceReader));
 
 		if (offset < 0 || bytesToRead < 0 || offset + bytesToRead > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));

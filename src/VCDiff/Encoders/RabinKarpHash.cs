@@ -10,10 +10,10 @@ using System.Runtime.Intrinsics.X86;
 namespace VCDiff.Encoders;
 
 /// <summary>
-///     A rolling hasher for <see cref="VcEncoder" /> and <see cref="VcDiffEncoder" />.
-///     A <see cref="RollingHash" /> may be reused across encoders with the same block size (see <see cref="VcEncoderOptions.RollingHash" />).
+///     A rolling hasher for <see cref="VcdiffEncoder" /> and <see cref="VcdiffSpanEncoder" />.
+///     A <see cref="RabinKarpHash" /> may be reused across encoders with the same block size (see <see cref="VcdiffEncoderOptions.RabinKarpHash" />).
 /// </summary>
-public class RollingHash : IDisposable
+public class RabinKarpHash : IDisposable
 {
 	private const int K_BASE = 1 << 23;
 	private const int K_MULT = 257;
@@ -31,21 +31,21 @@ public class RollingHash : IDisposable
 	private MemoryHandle kMultFactorsHandle;
 
     /// <summary>
-    ///     The window size for this rolling hash.
+    ///     The number of bytes hashed at a time (the block size).
     /// </summary>
-    public int WindowSize { get; }
+    public int BlockSize { get; }
     /// <summary>
-    ///     Manually creates a rolling hash instance for use with a <see cref="VcEncoder" />.
+    ///     Manually creates a rolling hash instance for use with a <see cref="VcdiffEncoder" />.
     ///     This object must be disposed because it allocates pinned memory that will never be garbage collected
     ///     if it is not disposed.
     /// </summary>
-    /// <param name="size">The window size to use for this hashing instance.</param>
-    public RollingHash(int size)
+    /// <param name="blockSize">The number of bytes hashed at a time (the block size).</param>
+    public RabinKarpHash(int blockSize)
 	{
 		this.vShuf = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
-		this.WindowSize = size;
+		this.BlockSize = blockSize;
 		this.removeTable = new ulong[256];
-		this.kMultFactors = new int[size];
+		this.kMultFactors = new int[blockSize];
 		this.kMultFactorsHandle = this.kMultFactors.AsMemory().Pin();
 		unsafe
 		{
@@ -54,13 +54,13 @@ public class RollingHash : IDisposable
 
 		this.multiplier = 1;
 
-		for (var i = 0; i < size - 1; ++i)
+		for (var i = 0; i < blockSize - 1; ++i)
 		{
 			this.kMultFactors[i] = (int)this.multiplier;
 			this.multiplier = (this.multiplier * K_MULT) & (K_BASE - 1);
 		}
 
-		this.kMultFactors[size - 1] = (int)this.multiplier;
+		this.kMultFactors[blockSize - 1] = (int)this.multiplier;
 
 		ulong byteTimes = 0;
 		for (var i = 0; i < 256; ++i)

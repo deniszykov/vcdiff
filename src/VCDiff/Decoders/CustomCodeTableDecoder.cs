@@ -32,15 +32,15 @@ internal sealed class CustomCodeTableDecoder
 	///     Decodes the section from <paramref name="source" />: the code table length (a varint) followed by that
 	///     many bytes. The sequence must hold the whole section.
 	/// </summary>
-	internal VcDiffResult Decode(ReadOnlySequence<byte> source)
+	internal bool Decode(ReadOnlySequence<byte> source)
 	{
-		var lengthOfCodeTable = VarIntBe.ParseInt32(source, out var lengthByteCount);
-		if (lengthOfCodeTable <= 0)
-			return VcDiffResult.ERROR;
+		var result = VarIntBe.TryParseInt32(source, out var lengthOfCodeTable, out var lengthByteCount);
+		if (result != ParseResult.Success || lengthOfCodeTable <= 0)
+			return false;
 
 		var codeTable = source.Slice(lengthByteCount);
 		if (codeTable.Length < lengthOfCodeTable)
-			return VcDiffResult.ERROR;
+			return false;
 
 		codeTable = codeTable.Slice(0, lengthOfCodeTable);
 		if (codeTable.IsSingleSegment)
@@ -59,39 +59,39 @@ internal sealed class CustomCodeTableDecoder
 		}
 	}
 
-	private VcDiffResult DecodeCore(ReadOnlySpan<byte> codeTable)
+	private bool DecodeCore(ReadOnlySpan<byte> codeTable)
 	{
 		// The near and same sizes are single bytes in the RFC (open-vcdiff reads them as varints, which is the
 		// same for the valid range).
 		if (codeTable.Length < 2)
-			return VcDiffResult.ERROR;
+			return false;
 
 		this.NearSize = codeTable[0];
 		this.SameSize = codeTable[1];
 
 		// Modes are bytes: SELF, HERE, near modes and same modes must all fit in 0..255.
-		if ((int)VcDiffModes.FIRST + this.NearSize + this.SameSize > (int)VcDiffModes.MAX) return VcDiffResult.ERROR;
+		if ((int)VcDiffModes.FIRST + this.NearSize + this.SameSize > (int)VcDiffModes.MAX) return false;
 
 		// The decoded table must be exactly CodeTable.SerializedSize bytes; one spare byte detects a longer output.
 		var serialized = this._bytePool.Rent(CodeTable.SerializedSize + 1);
 		try
 		{
-			using var decoder = new VcDiffDecoder(
-				new VcDecoderOptions { BytePool = this._bytePool },
-				new ReadOnlySequenceSource(new ReadOnlySequence<byte>(CodeTable.DefaultBytes)),
+			using var decoder = new VcdiffSpanDecoder(
+				new VcdiffDecoderOptions { BytePool = this._bytePool },
+				new SequenceSourceReader(new ReadOnlySequence<byte>(CodeTable.DefaultBytes)),
 				false);
 
 			var output = serialized.AsSpan(0, CodeTable.SerializedSize + 1);
 			var status = decoder.Decode(codeTable.Slice(2), output, out _, out var written, true);
 			if (status != OperationStatus.Done)
-				return VcDiffResult.ERROR;
+				return false;
 
 			// The COPY modes of every entry must fit the declared cache sizes.
 			if (!CodeTable.TryCreate(output.Slice(0, written), out var table) || !table!.AreModesValid(this.NearSize, this.SameSize))
-				return VcDiffResult.ERROR;
+				return false;
 
 			this.CustomTable = table;
-			return VcDiffResult.SUCCESS;
+			return true;
 		}
 		finally
 		{

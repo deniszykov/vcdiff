@@ -8,21 +8,21 @@ using VCDiff.Shared;
 namespace VCDiff.Encoders;
 
 /// <summary>
-///     The state shared by <see cref="VcEncoder" /> and <see cref="VcDiffEncoder" />: validated options,
-///     the dictionary, its <see cref="BlockHash" /> and the <see cref="RollingHash" /> used to build and probe it.
+///     The state shared by <see cref="VcdiffEncoder" /> and <see cref="VcdiffSpanEncoder" />: validated options,
+///     the dictionary, its <see cref="BlockHash" /> and the <see cref="RabinKarpHash" /> used to build and probe it.
 /// </summary>
 internal sealed class EncoderSession : IDisposable
 {
 	private const int MEBIBYTE = 1024 * 1024;
 
 	/// <summary>
-	///     The largest <see cref="VcEncoderOptions.MaxBufferSize" />, in MiB, whose window size still fits an <see cref="int" />.
+	///     The largest <see cref="VcdiffEncoderOptions.MaxWindowSizeMiB" />, in MiB, whose window size still fits an <see cref="int" />.
 	/// </summary>
-	private const int MAX_BUFFER_SIZE_MIB = int.MaxValue / MEBIBYTE;
+	private const int MAX_WINDOW_SIZE_MIB = int.MaxValue / MEBIBYTE;
 
 	private readonly int _blockSize;
-	private readonly IDictionaryReader dictionaryReader;
-	private readonly RollingHash _hasher;
+	private readonly ISourceReader dictionaryReader;
+	private readonly RabinKarpHash _hasher;
 	private readonly RecyclableMemoryStreamManager _manager;
 	private readonly int _minMatchSize;
 	private readonly bool _ownsHasher;
@@ -46,35 +46,35 @@ internal sealed class EncoderSession : IDisposable
 	/// </summary>
 	/// <param name="dictionaryReader">The dictionary. Ownership is taken, it is disposed even when this constructor throws.</param>
 	/// <param name="options">The encoder options.</param>
-	public EncoderSession(IDictionaryReader dictionaryReader, VcEncoderOptions options)
+	public EncoderSession(ISourceReader dictionaryReader, VcdiffEncoderOptions options)
 	{
 		this.dictionaryReader = dictionaryReader;
 		try
 		{
-			var maxBufferSize = options.MaxBufferSize;
-			if (maxBufferSize <= 0)
-				maxBufferSize = 1;
-			if (maxBufferSize > MAX_BUFFER_SIZE_MIB)
-				throw VcdiffException.MaxBufferSizeExceeded(MAX_BUFFER_SIZE_MIB);
+			var maxWindowSizeMiB = options.MaxWindowSizeMiB;
+			if (maxWindowSizeMiB <= 0)
+				maxWindowSizeMiB = 1;
+			if (maxWindowSizeMiB > MAX_WINDOW_SIZE_MIB)
+				throw VcdiffException.MaxWindowSizeMiBExceeded(MAX_WINDOW_SIZE_MIB);
 
 			var blockSize = options.BlockSize;
 			if (blockSize < 2 || blockSize % 2 != 0)
 				throw VcdiffException.BlockSizeInvalid(blockSize);
 
-			var minMatchSize = options.ChunkSize < 2 ? blockSize * 2 : options.ChunkSize;
+			var minMatchSize = options.MinMatchSize < 2 ? blockSize * 2 : options.MinMatchSize;
 			if (minMatchSize < 2 * blockSize)
-				throw VcdiffException.ChunkSizeTooSmall(minMatchSize, blockSize);
+				throw VcdiffException.MinMatchSizeTooSmall(minMatchSize, blockSize);
 
-			var rollingHash = options.RollingHash;
-			if (rollingHash != null && rollingHash.WindowSize != blockSize)
-				throw VcdiffException.RollingHashWindowMismatch();
+			var rabinKarpHash = options.RabinKarpHash;
+			if (rabinKarpHash != null && rabinKarpHash.BlockSize != blockSize)
+				throw VcdiffException.RabinKarpHashBlockSizeMismatch();
 
-			this.WindowSize = maxBufferSize * MEBIBYTE;
+			this.WindowSize = maxWindowSizeMiB * MEBIBYTE;
 			this._blockSize = blockSize;
 			this._minMatchSize = minMatchSize;
 			this._manager = options.MemoryStreamManagerOrDefault;
-			this._ownsHasher = rollingHash == null;
-			this._hasher = rollingHash ?? new RollingHash(blockSize);
+			this._ownsHasher = rabinKarpHash == null;
+			this._hasher = rabinKarpHash ?? new RabinKarpHash(blockSize);
 		}
 		catch
 		{
@@ -86,25 +86,25 @@ internal sealed class EncoderSession : IDisposable
 	/// <summary>
 	///     Throws when <paramref name="interleaved" /> and <paramref name="checksumFormat" /> can not be combined.
 	/// </summary>
-	public static void ValidateFormat(bool interleaved, ChecksumFormat checksumFormat)
+	public static void ValidateFormat(bool interleaved, WindowChecksumFormat checksumFormat)
 	{
-		if (interleaved && checksumFormat == ChecksumFormat.Xdelta3)
+		if (interleaved && checksumFormat == WindowChecksumFormat.Xdelta3)
 			throw VcdiffException.InterleavedXdelta3ChecksumNotSupported();
 	}
 
 	/// <summary>
 	///     The VCDIFF file header (magic bytes and header indicator) for the given output format.
 	/// </summary>
-	public static ReadOnlyMemory<byte> GetFileHeader(bool interleaved, ChecksumFormat checksumFormat)
+	public static ReadOnlyMemory<byte> GetFileHeader(bool interleaved, WindowChecksumFormat checksumFormat)
 	{
-		return FileHeader.Get(interleaved || checksumFormat == ChecksumFormat.SDCH);
+		return FileHeader.Get(interleaved || checksumFormat == WindowChecksumFormat.Sdch);
 	}
 
 	/// <summary>
 	///     Creates a window encoder over this session's dictionary. The dictionary is hashed on the first call.
 	///     The returned encoder must be disposed before this session.
 	/// </summary>
-	public ChunkEncoder CreateChunkEncoder(bool interleaved, ChecksumFormat checksumFormat)
+	public ChunkEncoder CreateChunkEncoder(bool interleaved, WindowChecksumFormat checksumFormat)
 	{
 		if (this._disposed)
 			throw new ObjectDisposedException(nameof(EncoderSession));

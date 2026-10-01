@@ -6,31 +6,6 @@ using System;
 namespace VCDiff;
 
 /// <summary>
-///     The category of a <see cref="VcdiffException" />, allowing callers to distinguish failure kinds without
-///     catching multiple exception types.
-/// </summary>
-public enum VcdiffError
-{
-	/// <summary>The input ended before the expected amount of data was available.</summary>
-	Truncated,
-
-	/// <summary>Data was present but malformed, corrupt, or self-inconsistent.</summary>
-	InvalidFormat,
-
-	/// <summary>A caller-supplied argument was invalid for the requested operation.</summary>
-	InvalidArgument,
-
-	/// <summary>The input is valid, but the feature or configuration is not supported.</summary>
-	Unsupported,
-
-	/// <summary>An I/O operation on a stream failed.</summary>
-	IoError,
-
-	/// <summary>An internal invariant was violated; this indicates a bug.</summary>
-	InternalError,
-}
-
-/// <summary>
 ///     The single exception type thrown by the library for domain, format, and I/O errors. Standard .NET contract
 ///     exceptions (<see cref="ArgumentNullException" />, <see cref="ArgumentOutOfRangeException" />,
 ///     <see cref="ObjectDisposedException" />) are still used for plain argument and lifetime checks.
@@ -146,8 +121,8 @@ public sealed class VcdiffException : Exception
 	public static VcdiffException BlockFilterInfoTooLarge() =>
 		new(VcdiffError.InvalidFormat, "Block filter information too large");
 
-	public static VcdiffException TargetWindowTooLarge(long maxTargetFileSize) =>
-		new(VcdiffError.InvalidFormat, $"Length of a target window exceeds the limit of {maxTargetFileSize} bytes.");
+	public static VcdiffException TargetWindowTooLarge(long maxTargetWindowSize) =>
+		new(VcdiffError.InvalidFormat, $"Length of a target window exceeds the limit of {maxTargetWindowSize} bytes.");
 
 	// ------------------------------------------------------------------ InvalidArgument
 
@@ -157,20 +132,20 @@ public sealed class VcdiffException : Exception
 	public static VcdiffException DictionaryTooLarge() =>
 		new(VcdiffError.InvalidArgument, "The dictionary can not be larger than 2 GiB.");
 
-	public static VcdiffException MaxTargetFileSizeNotPositive() =>
-		new(VcdiffError.InvalidArgument, "MaxTargetFileSize must be a positive value.");
+	public static VcdiffException MaxTargetWindowSizeNotPositive() =>
+		new(VcdiffError.InvalidArgument, "MaxTargetWindowSize must be a positive value.");
 
-	public static VcdiffException MaxBufferSizeExceeded(int maxMib) =>
-		new(VcdiffError.InvalidArgument, $"MaxBufferSize can not exceed {maxMib} MiB.");
+	public static VcdiffException MaxWindowSizeMiBExceeded(int maxMib) =>
+		new(VcdiffError.InvalidArgument, $"MaxWindowSizeMiB can not exceed {maxMib} MiB.");
 
 	public static VcdiffException BlockSizeInvalid(int blockSize) =>
 		new(VcdiffError.InvalidArgument, $"BlockSize must be an even number of at least 2, but is {blockSize}.");
 
-	public static VcdiffException ChunkSizeTooSmall(int minMatchSize, int blockSize) =>
-		new(VcdiffError.InvalidArgument, $"ChunkSize ({minMatchSize}) can not be less than twice the BlockSize ({blockSize}).");
+	public static VcdiffException MinMatchSizeTooSmall(int minMatchSize, int blockSize) =>
+		new(VcdiffError.InvalidArgument, $"MinMatchSize ({minMatchSize}) can not be less than twice the BlockSize ({blockSize}).");
 
-	public static VcdiffException RollingHashWindowMismatch() =>
-		new(VcdiffError.InvalidArgument, "Supplied RollingHash instance has a different window size than blocksize!");
+	public static VcdiffException RabinKarpHashBlockSizeMismatch() =>
+		new(VcdiffError.InvalidArgument, "Supplied RabinKarpHash instance has a different block size than BlockSize!");
 
 	public static VcdiffException InterleavedXdelta3ChecksumNotSupported() =>
 		new(VcdiffError.InvalidArgument, "Interleaved diffs can not have an xdelta3 checksum!");

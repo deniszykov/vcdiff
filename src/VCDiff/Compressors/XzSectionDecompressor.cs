@@ -69,8 +69,8 @@ internal sealed class XzSectionDecompressor : IDisposable
 				throw new ArgumentOutOfRangeException(nameof(windowSectionType));
 		}
 
-		var uncompressedLength = VarIntBe.ParseInt32(sectionData, out var uncompressedLengthByteCount);
-		if (uncompressedLength < 0 || uncompressedLength > maxLength) throw VcdiffException.InvalidSecondaryCompressedSectionLength();
+		var result = VarIntBe.TryParseInt32(sectionData, out var uncompressedLength, out var uncompressedLengthByteCount);
+		if (result != ParseResult.Success || uncompressedLength > maxLength) throw VcdiffException.InvalidSecondaryCompressedSectionLength();
 
 		var decompressedData = new PooledArray(uncompressedLength, this._bytePool);
 		try

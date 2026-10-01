@@ -13,7 +13,7 @@ namespace VCDiff.Decoders;
 
 /// <summary>
 ///     A <see cref="Stream" /> based VCDIFF decoder. It reads the delta stream in pooled chunks, decodes it with a
-///     <see cref="VcDiffDecoder" /> and writes the target to the output stream.
+///     <see cref="VcdiffSpanDecoder" /> and writes the target to the output stream.
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -22,24 +22,24 @@ namespace VCDiff.Decoders;
 ///         whose buffer is exposable, is read in place and must not be modified while decoding. Any other seekable
 ///         stream is read on demand (Seek + Read) and is not loaded into memory. A non-seekable stream is first
 ///         copied into a pooled <see cref="RecyclableMemoryStream" /> from
-///         <see cref="VcDecoderOptions.MemoryStreamManager" />.
+///         <see cref="VcdiffDecoderOptions.MemoryStreamManager" />.
 ///     </para>
 ///     <para>
 ///         The delta stream is read from its current position to its end and does not have to be seekable. None of
 ///         the streams are disposed by this class.
 ///     </para>
 /// </remarks>
-public class VcDecoder : IDisposable
+public class VcdiffDecoder : IDisposable
 {
 	private const int DELTA_BUFFER_SIZE = 64 * 1024;
 	private const int OUTPUT_BUFFER_SIZE = 64 * 1024;
 
 	private readonly Stream _delta;
-	private readonly VcDecoderOptions _options;
+	private readonly VcdiffDecoderOptions _options;
 	private readonly Stream _output;
 	private readonly Stream _source;
 	private bool _completed;
-	private VcDiffDecoder? _decoder;
+	private VcdiffSpanDecoder? _decoder;
 	private bool _disposed;
 	private RecyclableMemoryStream? _sourceCopy;
 
@@ -55,8 +55,8 @@ public class VcDecoder : IDisposable
     /// <param name="source">The dictionary stream, or the base file.</param>
     /// <param name="delta">The stream containing the VCDIFF delta.</param>
     /// <param name="outputStream">The stream to write the output in.</param>
-    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
-    public VcDecoder(Stream source, Stream delta, Stream outputStream, VcDecoderOptions options)
+    /// <param name="options">The decoder options. See <see cref="VcdiffDecoderOptions" />.</param>
+    public VcdiffDecoder(Stream source, Stream delta, Stream outputStream, VcdiffDecoderOptions options)
 	{
 		if (options == null) throw new ArgumentNullException(nameof(options));
 
@@ -65,8 +65,8 @@ public class VcDecoder : IDisposable
 		this._output = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
 
 		// Snapshot the options so later changes to the caller's instance do not affect this decoder.
-		this._options = new VcDecoderOptions {
-			MaxTargetFileSize = options.MaxTargetFileSize,
+		this._options = new VcdiffDecoderOptions {
+			MaxTargetWindowSize = options.MaxTargetWindowSize,
 			DisableChecksums = options.DisableChecksums,
 			BytePool = options.BytePoolOrDefault,
 			MemoryStreamManager = options.MemoryStreamManagerOrDefault
@@ -79,14 +79,14 @@ public class VcDecoder : IDisposable
     /// <param name="source">The dictionary stream, or the base file.</param>
     /// <param name="delta">The stream containing the VCDIFF delta.</param>
     /// <param name="outputStream">The stream to write the output in.</param>
-    /// <param name="maxTargetFileSize">The maximum target file size (and target window size) in bytes</param>
+    /// <param name="maxTargetWindowSize">The maximum target file size (and target window size) in bytes</param>
     /// <param name="disableChecksums">
     ///     Whether to disable checksums when applying the delta. This can be dangerous, but can be
     ///     useful when the input file differs in ways that the delta does not reference.
     /// </param>
-    public VcDecoder
-		(Stream source, Stream delta, Stream outputStream, int maxTargetFileSize = VcDecoderOptions.DEFAULT_MAX_TARGET_FILE_SIZE, bool disableChecksums = false)
-		: this(source, delta, outputStream, new VcDecoderOptions { MaxTargetFileSize = maxTargetFileSize, DisableChecksums = disableChecksums })
+    public VcdiffDecoder
+		(Stream source, Stream delta, Stream outputStream, int maxTargetWindowSize = VcdiffDecoderOptions.DEFAULT_MAX_TARGET_FILE_SIZE, bool disableChecksums = false)
+		: this(source, delta, outputStream, new VcdiffDecoderOptions { MaxTargetWindowSize = maxTargetWindowSize, DisableChecksums = disableChecksums })
 	{
 	}
 
@@ -95,17 +95,17 @@ public class VcDecoder : IDisposable
     /// </summary>
     /// <param name="bytesWritten">Number of bytes written into the output stream.</param>
     /// <returns>
-    ///     <see cref="VcDiffResult.SUCCESS" /> when the whole delta was applied, <see cref="VcDiffResult.EOD" /> when the
-    ///     delta ended early (or was already decoded) and <see cref="VcDiffResult.ERROR" /> when it is invalid.
+    ///     <see cref="VcdiffResult.Success" /> when the whole delta was applied, <see cref="VcdiffResult.Incomplete" /> when the
+    ///     delta ended early (or was already decoded) and <see cref="VcdiffResult.Error" /> when it is invalid.
     /// </returns>
     /// <exception cref="VcdiffException">The maximum target file size is not positive.</exception>
     /// <exception cref="VcdiffException">A target window is larger than the maximum target file size.</exception>
     /// <exception cref="VcdiffException">The delta uses an unsupported secondary compressor.</exception>
-    public VcDiffResult Decode(out long bytesWritten)
+    public VcdiffResult Decode(out long bytesWritten)
 	{
 		bytesWritten = 0;
 		if (!this.CanDecode())
-			return VcDiffResult.EOD;
+			return VcdiffResult.Incomplete;
 
 		if (this._decoder == null)
 		{
@@ -155,11 +155,11 @@ public class VcDecoder : IDisposable
     ///     asynchronously; decoding itself runs synchronously between those operations.
     /// </summary>
     /// <returns>The result (see <see cref="Decode" />) and the number of bytes written into the output stream.</returns>
-    public async Task<(VcDiffResult result, long bytesWritten)> DecodeAsync()
+    public async Task<(VcdiffResult result, long bytesWritten)> DecodeAsync()
 	{
 		long bytesWritten = 0;
 		if (!this.CanDecode())
-			return (VcDiffResult.EOD, bytesWritten);
+			return (VcdiffResult.Incomplete, bytesWritten);
 
 		if (this._decoder == null)
 		{
@@ -207,14 +207,14 @@ public class VcDecoder : IDisposable
 	private bool CanDecode()
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(VcDecoder));
+			throw new ObjectDisposedException(nameof(VcdiffDecoder));
 
-		// A delta is decoded once; like the end of the delta stream, a further call reports EOD.
+		// A delta is decoded once; like the end of the delta stream, a further call reports Incomplete.
 		if (this._completed)
 			return false;
 
-		if (this._options.MaxTargetFileSize <= 0)
-			throw VcdiffException.MaxTargetFileSizeNotPositive();
+		if (this._options.MaxTargetWindowSize <= 0)
+			throw VcdiffException.MaxTargetWindowSizeNotPositive();
 
 		// Every call runs the delta to its end, to an error or to an exception: the decoder is single use.
 		this._completed = true;
@@ -223,17 +223,17 @@ public class VcDecoder : IDisposable
 
 	private RecyclableMemoryStream RentSourceCopy()
 	{
-		var copy = this._options.MemoryStreamManagerOrDefault.GetStream(nameof(VcDecoder));
+		var copy = this._options.MemoryStreamManagerOrDefault.GetStream(nameof(VcdiffDecoder));
 		this._sourceCopy = copy;
 		return copy;
 	}
 
 	private void CreateDecoder()
 	{
-		this._decoder = new VcDiffDecoder(this._options, this.OpenDictionary(), true);
+		this._decoder = new VcdiffSpanDecoder(this._options, this.OpenDictionary(), true);
 	}
 
-	private IDictionaryReader OpenDictionary()
+	private ISourceReader OpenDictionary()
 	{
 		var source = this._sourceCopy ?? this._source;
 
@@ -249,39 +249,39 @@ public class VcDecoder : IDisposable
 				this._sourceCopy = null; // ownership moved to the reader
 			}
 
-			return new ReadOnlySequenceSource(recyclable.GetReadOnlySequence(), release);
+			return new SequenceSourceReader(recyclable.GetReadOnlySequence(), release);
 		}
 
 		if (source is MemoryStream memory && memory.TryGetBuffer(out var buffer))
-			return new ReadOnlySequenceSource(new ReadOnlySequence<byte>(buffer.Array!, buffer.Offset, buffer.Count));
+			return new SequenceSourceReader(new ReadOnlySequence<byte>(buffer.Array!, buffer.Offset, buffer.Count));
 
-		return new StreamDictionaryReader(source, this._options.BytePoolOrDefault, this._options.MemoryStreamManagerOrDefault.GetStream());
+		return new StreamSourceReader(source, this._options.BytePoolOrDefault, this._options.MemoryStreamManagerOrDefault.GetStream());
 	}
 
-	private bool IsFinished(OperationStatus status, bool endOfDelta, out VcDiffResult result)
+	private bool IsFinished(OperationStatus status, bool endOfDelta, out VcdiffResult result)
 	{
 		// ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
 		switch (status)
 		{
 			case OperationStatus.DestinationTooSmall:
-				result = VcDiffResult.SUCCESS;
+				result = VcdiffResult.Success;
 				return false;
 			case OperationStatus.NeedMoreData:
 				// The decoder never asks for more after the final input; guard against looping forever anyway.
-				result = VcDiffResult.EOD;
+				result = VcdiffResult.Incomplete;
 				if (!endOfDelta)
 					return false;
 
 				break;
 			case OperationStatus.Done:
-				result = VcDiffResult.SUCCESS;
+				result = VcdiffResult.Success;
 				break;
 			default:
 				result = this._decoder!.Failure switch {
-					DecodeFailure.Truncated => VcDiffResult.EOD,
-					DecodeFailure.TargetWindowTooLarge => throw VcdiffException.TargetWindowTooLarge(this._options.MaxTargetFileSize),
+					DecodeFailure.Truncated => VcdiffResult.Incomplete,
+					DecodeFailure.TargetWindowTooLarge => throw VcdiffException.TargetWindowTooLarge(this._options.MaxTargetWindowSize),
 					DecodeFailure.UnsupportedSecondaryCompressor => throw VcdiffException.UnsupportedSecondaryCompressor(),
-					_ => VcDiffResult.ERROR
+					_ => VcdiffResult.Error
 				};
 				break;
 		}

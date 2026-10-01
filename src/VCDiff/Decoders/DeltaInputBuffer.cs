@@ -7,7 +7,7 @@ using System.Buffers;
 namespace VCDiff.Decoders;
 
 /// <summary>
-///     The FIFO buffer that holds the delta bytes <see cref="VcDiffDecoder" /> has taken from the caller but
+///     The FIFO buffer that holds the delta bytes <see cref="VcdiffSpanDecoder" /> has taken from the caller but
 ///     not parsed yet, across incremental decode calls. Bytes are appended at the end, read from a logical position,
 ///     and the consumed prefix can be compacted away.
 /// </summary>

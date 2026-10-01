@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using BenchmarkDotNet.Attributes;
 using VCDiff.Encoders;
@@ -43,7 +43,7 @@ public class RandomDataEncode
 		using var targetStream = new MemoryStream(this._dataSlightModified);
 		using var patchStream = new MemoryStream(this._data.Length);
 
-		using var encoder = new VcEncoder(this._sourceStream, targetStream, patchStream, 1, this.BlockSize);
+		using var encoder = new VcdiffEncoder(this._sourceStream, targetStream, patchStream, 1, this.BlockSize);
 		encoder.Encode();
 	}
 
@@ -53,7 +53,7 @@ public class RandomDataEncode
 		using var targetStream = new MemoryStream(this._dataHeavyModified);
 		using var patchStream = new MemoryStream(this._data.Length);
 
-		using var encoder = new VcEncoder(this._sourceStream, targetStream, patchStream, 1, this.BlockSize);
+		using var encoder = new VcdiffEncoder(this._sourceStream, targetStream, patchStream, 1, this.BlockSize);
 		encoder.Encode();
 	}
 

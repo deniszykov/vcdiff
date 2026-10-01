@@ -30,11 +30,11 @@ internal sealed unsafe class BlockHash : IDisposable
 	private const int MAX_BYTES_PER_DICTIONARY_READ = 1 * 1024 * 1024; // 1Mib
 	private readonly int blocksCount;
 	internal readonly int BlockSize;
-	private readonly RollingHash hasher;
+	private readonly RabinKarpHash hasher;
 	private readonly ulong hashTableMask;
 
 	private readonly int maxMatchesToCheck;
-	private readonly IDictionaryReader dictionaryReader;
+	private readonly ISourceReader dictionaryReader;
 	private bool disposed;
 	private NativeAllocation<int> hashTable;
 	private int lastBlockAdded;
@@ -47,7 +47,7 @@ internal sealed unsafe class BlockHash : IDisposable
     /// <param name="dictionaryReader">the data to create the table for</param>
     /// <param name="hasher">the hashing method</param>
     /// <param name="blockSize">The block size to use</param>
-    public BlockHash(IDictionaryReader dictionaryReader, RollingHash hasher, int blockSize = 16)
+    public BlockHash(ISourceReader dictionaryReader, RabinKarpHash hasher, int blockSize = 16)
 	{
 		this.BlockSize = blockSize;
 		this.maxMatchesToCheck = this.BlockSize >= 32 ? 32 : 32 * (32 / this.BlockSize);

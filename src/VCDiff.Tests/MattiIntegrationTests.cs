@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using VCDiff.Decoders;
 using VCDiff.Encoders;
@@ -50,8 +50,8 @@ public class MattiIntegrationTests
 		var sNew = new MemoryStream(newData);
 		var sDelta = new MemoryStream(new byte[size], true);
 
-		var coder = new VcEncoder(sOld, sNew, sDelta);
-		Assert.Equal(VcDiffResult.SUCCESS, coder.Encode());
+		var coder = new VcdiffEncoder(sOld, sNew, sDelta);
+		Assert.Equal(VcdiffResult.Success, coder.Encode());
 
 		sDelta.SetLength(sDelta.Position);
 		sDelta.Position = 0;
@@ -60,8 +60,8 @@ public class MattiIntegrationTests
 
 		var sPatched = new MemoryStream(new byte[size], true);
 
-		var decoder = new VcDecoder(sOld, sDelta, sPatched);
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
+		var decoder = new VcdiffDecoder(sOld, sDelta, sPatched);
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out var bytesWritten));
 
 		Assert.Equal(sNew.ToArray(), sPatched.ToArray());
 	}

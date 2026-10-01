@@ -8,15 +8,15 @@ using VCDiff.Shared;
 namespace VCDiff.Encoders;
 
 /// <summary>
-///     Options for configuring a <see cref="VcEncoder" /> or <see cref="VcDiffEncoder" />.
+///     Options for configuring a <see cref="VcdiffEncoder" /> or <see cref="VcdiffSpanEncoder" />.
 /// </summary>
-public class VcEncoderOptions
+public class VcdiffEncoderOptions
 {
     /// <summary>
     ///     The maximum buffer size for window chunking in megabytes (MiB). Values below 1 mean 1;
     ///     values above 2047 are rejected with an <see cref="System.ArgumentOutOfRangeException" />.
     /// </summary>
-    public int MaxBufferSize { get; set; } = 1;
+    public int MaxWindowSizeMiB { get; set; } = 1;
 
     /// <summary>
     ///     The block size to use. Must be an even number of at least 2; a power of two is recommended.
@@ -28,33 +28,33 @@ public class VcEncoderOptions
     ///     The minimum size of a string match that is worth putting into a COPY. This must be
     ///     at least twice the block size. Values below 2 mean twice the block size.
     /// </summary>
-    public int ChunkSize { get; set; }
+    public int MinMatchSize { get; set; }
 
     /// <summary>
-    ///     A <see cref="RollingHash" /> instance that can be reused across multiple encoding
+    ///     A <see cref="RabinKarpHash" /> instance that can be reused across multiple encoding
     ///     instances of the same block size. If provided, the caller is responsible for
     ///     disposing it.
     /// </summary>
-    public RollingHash? RollingHash { get; set; }
+    public RabinKarpHash? RabinKarpHash { get; set; }
 
     /// <summary>
     ///     Whether to emit the SDCH interleaved format.
     /// </summary>
     /// <remarks>
-    ///     Used by <see cref="VcDiffEncoder" /> only. <see cref="VcEncoder" /> ignores it and takes the format as an
-    ///     argument of <see cref="VcEncoder.Encode" /> / <see cref="VcEncoder.EncodeAsync" />.
+    ///     Used by <see cref="VcdiffSpanEncoder" /> only. <see cref="VcdiffEncoder" /> ignores it and takes the format as an
+    ///     argument of <see cref="VcdiffEncoder.Encode" /> / <see cref="VcdiffEncoder.EncodeAsync" />.
     /// </remarks>
     public bool Interleaved { get; set; }
 
     /// <summary>
-    ///     The checksum format to emit for each window. <see cref="Shared.ChecksumFormat.Xdelta3" /> can not be
+    ///     The checksum format to emit for each window. <see cref="Shared.WindowChecksumFormat.Xdelta3" /> can not be
     ///     combined with <see cref="Interleaved" />.
     /// </summary>
     /// <remarks>
-    ///     Used by <see cref="VcDiffEncoder" /> only. <see cref="VcEncoder" /> ignores it and takes the format as an
-    ///     argument of <see cref="VcEncoder.Encode" /> / <see cref="VcEncoder.EncodeAsync" />.
+    ///     Used by <see cref="VcdiffSpanEncoder" /> only. <see cref="VcdiffEncoder" /> ignores it and takes the format as an
+    ///     argument of <see cref="VcdiffEncoder.Encode" /> / <see cref="VcdiffEncoder.EncodeAsync" />.
     /// </remarks>
-    public ChecksumFormat ChecksumFormat { get; set; }
+    public WindowChecksumFormat WindowChecksumFormat { get; set; }
 
     /// <summary>
     ///     The <see cref="ArrayPool{T}" /> used to rent internal byte buffers. When

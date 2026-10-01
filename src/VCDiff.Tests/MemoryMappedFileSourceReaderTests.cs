@@ -14,11 +14,11 @@ namespace VCDiff.Tests;
 ///     The memory-mapped dictionary reader must produce the same deltas and decodes as the in-memory reader, and
 ///     its raw-pointer members must match the mapped bytes exactly.
 /// </summary>
-public class MemoryMappedFileDictionaryReaderTests : IDisposable
+public class MemoryMappedFileSourceReaderTests : IDisposable
 {
 	private readonly string _dir;
 
-	public MemoryMappedFileDictionaryReaderTests()
+	public MemoryMappedFileSourceReaderTests()
 	{
 		this._dir = Path.Combine(Path.GetTempPath(), "vcdiff-mmftests-" + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(this._dir);
@@ -99,9 +99,9 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 		return target.ToArray();
 	}
 
-	private static byte[] Encode(IDictionaryReader dictionary, byte[] target, VcEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
+	private static byte[] Encode(ISourceReader dictionary, byte[] target, VcdiffEncoderOptions options, int inChunk = 50000, int outChunk = 4096)
 	{
-		using var enc = new VcDiffEncoder(dictionary, options);
+		using var enc = new VcdiffSpanEncoder(dictionary, options);
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
 		var input = target.AsSpan();
@@ -118,9 +118,9 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 		return result.ToArray();
 	}
 
-	private static byte[] Decode(IDictionaryReader dictionary, byte[] delta, int inChunk = 50000, int outChunk = 4096)
+	private static byte[] Decode(ISourceReader dictionary, byte[] delta, int inChunk = 50000, int outChunk = 4096)
 	{
-		using var dec = new VcDiffDecoder(dictionary);
+		using var dec = new VcdiffSpanDecoder(dictionary);
 		var result = new MemoryStream();
 		var outBuf = new byte[outChunk];
 		var input = delta.AsSpan();
@@ -140,17 +140,17 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	}
 
 	[Theory]
-	[InlineData(false, ChecksumFormat.None, 16)]
-	[InlineData(false, ChecksumFormat.Xdelta3, 32)]
-	[InlineData(true, ChecksumFormat.SDCH, 32)]
-	public void Encoder_Output_MatchesInMemoryDictionary(bool interleaved, ChecksumFormat checksumFormat, int blockSize)
+	[InlineData(false, WindowChecksumFormat.None, 16)]
+	[InlineData(false, WindowChecksumFormat.Xdelta3, 32)]
+	[InlineData(true, WindowChecksumFormat.Sdch, 32)]
+	public void Encoder_Output_MatchesInMemoryDictionary(bool interleaved, WindowChecksumFormat checksumFormat, int blockSize)
 	{
 		var dict = MakeDictionary(300_000, 11);
 		var target = MakeTarget(dict, 800_000, 12);
-		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = checksumFormat, BlockSize = blockSize };
+		var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = checksumFormat, BlockSize = blockSize };
 
-		var expected = Encode(new ReadOnlySequenceSource(new ReadOnlySequence<byte>(dict)), target, options);
-		var actual = Encode(new MemoryMappedFileDictionaryReader(this.Write(dict)), target, options);
+		var expected = Encode(new SequenceSourceReader(new ReadOnlySequence<byte>(dict)), target, options);
+		var actual = Encode(new MemoryMappedFileSourceReader(this.Write(dict)), target, options);
 
 		Assert.Equal(expected, actual);
 	}
@@ -162,17 +162,17 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	{
 		var dict = MakeDictionary(300_000, 21);
 		var target = MakeTarget(dict, 600_000, 22);
-		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
-		var delta = Encode(new ReadOnlySequenceSource(new ReadOnlySequence<byte>(dict)), target, options);
+		var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = WindowChecksumFormat.Sdch };
+		var delta = Encode(new SequenceSourceReader(new ReadOnlySequence<byte>(dict)), target, options);
 
-		Assert.Equal(target, Decode(new MemoryMappedFileDictionaryReader(this.Write(dict)), delta));
+		Assert.Equal(target, Decode(new MemoryMappedFileSourceReader(this.Write(dict)), delta));
 	}
 
 	[Fact]
 	public unsafe void Reader_Methods_MatchInMemory()
 	{
 		var data = MakeDictionary(70_000, 31); // spans multiple pages
-		using var reader = new MemoryMappedFileDictionaryReader(this.Write(data));
+		using var reader = new MemoryMappedFileSourceReader(this.Write(data));
 
 		Assert.Equal((long)data.Length, reader.Length);
 
@@ -207,7 +207,7 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	public void Dispose_ReleasesTheFile()
 	{
 		var path = this.Write(MakeDictionary(4096, 41));
-		using (var reader = new MemoryMappedFileDictionaryReader(path))
+		using (var reader = new MemoryMappedFileSourceReader(path))
 		{
 			Assert.Equal(4096L, reader.Length);
 		}
@@ -219,7 +219,7 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	[Fact]
 	public void Disposed_Throws()
 	{
-		var reader = new MemoryMappedFileDictionaryReader(this.Write(MakeDictionary(100, 51)));
+		var reader = new MemoryMappedFileSourceReader(this.Write(MakeDictionary(100, 51)));
 		reader.Dispose();
 
 		Assert.Throws<ObjectDisposedException>(() => reader.CopyTo(0, new byte[1]));
@@ -228,7 +228,7 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	[Fact]
 	public void EmptyDictionary_IsSupported()
 	{
-		using var reader = new MemoryMappedFileDictionaryReader(this.Write(Array.Empty<byte>()));
+		using var reader = new MemoryMappedFileSourceReader(this.Write(Array.Empty<byte>()));
 
 		Assert.Equal(0L, reader.Length);
 		Assert.Equal(0, reader.Read(0, 0).Length);
@@ -237,7 +237,7 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 	[Fact]
 	public void OutOfRange_Throws()
 	{
-		using var reader = new MemoryMappedFileDictionaryReader(this.Write(new byte[10]));
+		using var reader = new MemoryMappedFileSourceReader(this.Write(new byte[10]));
 
 		Assert.Throws<ArgumentOutOfRangeException>(() => reader.CopyTo(9, new byte[2]));
 		Assert.Throws<ArgumentOutOfRangeException>(() => reader.CopyTo(-1, new byte[1]));
@@ -251,7 +251,7 @@ public class MemoryMappedFileDictionaryReaderTests : IDisposable
 		var path = this.Write(data);
 		using var file = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, data.Length, MemoryMappedFileAccess.Read);
 
-		using (var reader = new MemoryMappedFileDictionaryReader(file, data.Length, leaveOpen: true))
+		using (var reader = new MemoryMappedFileSourceReader(file, data.Length, leaveOpen: true))
 		{
 			var copy = new byte[data.Length];
 			reader.CopyTo(0, copy);

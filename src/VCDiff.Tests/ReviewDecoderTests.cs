@@ -11,7 +11,7 @@ using Xunit;
 
 namespace VCDiff.Tests;
 
-// Review tests for the Stream based decoder (VcDecoder): streams that hand out 1-3 bytes per Read (which also drives
+// Review tests for the Stream based decoder (VcdiffDecoder): streams that hand out 1-3 bytes per Read (which also drives
 // the on-demand Seek+Read dictionary path), in-memory and non-seekable dictionaries, truncated deltas, pool hygiene
 // (dirty, oversized pooled arrays; every rent returned exactly once) and double Dispose.
 public class ReviewDecoderTests
@@ -39,9 +39,9 @@ public class ReviewDecoderTests
 		using var delta = new ChunkedStream(ReadPatchFile(patchFile), maxChunk);
 		using var output = new MemoryStream();
 
-		using (var decoder = new VcDecoder(source, delta, output))
+		using (var decoder = new VcdiffDecoder(source, delta, output))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var written));
+			Assert.Equal(VcdiffResult.Success, decoder.Decode(out var written));
 			Assert.Equal(expected.Length, written);
 		}
 
@@ -56,10 +56,10 @@ public class ReviewDecoderTests
 		using var delta = new ChunkedStream(ReadPatchFile(patchFile), maxChunk);
 		using var output = new MemoryStream();
 
-		using (var decoder = new VcDecoder(source, delta, output))
+		using (var decoder = new VcdiffDecoder(source, delta, output))
 		{
 			var (result, written) = await decoder.DecodeAsync();
-			Assert.Equal(VcDiffResult.SUCCESS, result);
+			Assert.Equal(VcdiffResult.Success, result);
 			Assert.Equal(expected.Length, written);
 		}
 
@@ -77,8 +77,8 @@ public class ReviewDecoderTests
 		using var delta = new ChunkedStream(ReadPatchFile(patchFile), 3);
 		using var output = new MemoryStream();
 
-		var decoder = new VcDecoder(source, delta, output, new VcDecoderOptions { BytePool = pool });
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out _));
+		var decoder = new VcdiffDecoder(source, delta, output, new VcdiffDecoderOptions { BytePool = pool });
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out _));
 		decoder.Dispose();
 		decoder.Dispose();
 
@@ -94,7 +94,7 @@ public class ReviewDecoderTests
 		using var delta = new MemoryStream(ReadPatchFile("patch.openvcdiff"));
 		using var output = new MemoryStream();
 
-		var decoder = new VcDecoder(source, delta, output, new VcDecoderOptions { BytePool = pool });
+		var decoder = new VcdiffDecoder(source, delta, output, new VcdiffDecoderOptions { BytePool = pool });
 		decoder.Dispose();
 		decoder.Dispose();
 
@@ -102,9 +102,9 @@ public class ReviewDecoderTests
 	}
 
 	// Overlapping target COPY (a repeating pattern) encoded by this library, decoded through 1-byte reads.
-	[Theory, InlineData(1, false, ChecksumFormat.None), InlineData(3, false, ChecksumFormat.Xdelta3), InlineData(1, true, ChecksumFormat.SDCH),
-	InlineData(2, true, ChecksumFormat.SDCH)]
-	public void LegacyDecoder_RepeatingTarget_SmallChunks(int maxChunk, bool interleaved, ChecksumFormat checksumFormat)
+	[Theory, InlineData(1, false, WindowChecksumFormat.None), InlineData(3, false, WindowChecksumFormat.Xdelta3), InlineData(1, true, WindowChecksumFormat.Sdch),
+	InlineData(2, true, WindowChecksumFormat.Sdch)]
+	public void LegacyDecoder_RepeatingTarget_SmallChunks(int maxChunk, bool interleaved, WindowChecksumFormat checksumFormat)
 	{
 		var target = new byte[40_000];
 		for (var i = 0; i < target.Length; i++) target[i] = (byte)("abcdefg"[i % 7] + i / 5000);
@@ -113,15 +113,15 @@ public class ReviewDecoderTests
 		new Random(42).NextBytes(dict);
 
 		using var deltaStream = new MemoryStream();
-		using (var encoder = new VcEncoder(new MemoryStream(dict), new MemoryStream(target), deltaStream))
+		using (var encoder = new VcdiffEncoder(new MemoryStream(dict), new MemoryStream(target), deltaStream))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, encoder.Encode(interleaved, checksumFormat));
+			Assert.Equal(VcdiffResult.Success, encoder.Encode(interleaved, checksumFormat));
 		}
 
 		using var output = new MemoryStream();
-		using (var decoder = new VcDecoder(new ChunkedStream(dict, maxChunk), new ChunkedStream(deltaStream.ToArray(), maxChunk), output))
+		using (var decoder = new VcdiffDecoder(new ChunkedStream(dict, maxChunk), new ChunkedStream(deltaStream.ToArray(), maxChunk), output))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out _));
+			Assert.Equal(VcdiffResult.Success, decoder.Decode(out _));
 		}
 
 		Assert.Equal(target, output.ToArray());
@@ -146,9 +146,9 @@ public class ReviewDecoderTests
 			using var delta = new MemoryStream(ReadPatchFile(patchFile), false);
 			using var output = new MemoryStream();
 
-			var decoder = new VcDecoder(source, delta, output, new VcDecoderOptions { BytePool = pool });
+			var decoder = new VcdiffDecoder(source, delta, output, new VcdiffDecoderOptions { BytePool = pool });
 			var (result, written) = useAsync ? await decoder.DecodeAsync() : (decoder.Decode(out var w), w);
-			Assert.Equal(VcDiffResult.SUCCESS, result);
+			Assert.Equal(VcdiffResult.Success, result);
 			Assert.Equal(expected.Length, written);
 			decoder.Dispose();
 
@@ -189,8 +189,8 @@ public class ReviewDecoderTests
 		for (var length = 0; length < delta.Length; length += step)
 		{
 			using var output = new MemoryStream();
-			using var decoder = new VcDecoder(new MemoryStream(dict, false), new MemoryStream(delta, 0, length, false), output);
-			Assert.Equal(VcDiffResult.EOD, decoder.Decode(out var written));
+			using var decoder = new VcdiffDecoder(new MemoryStream(dict, false), new MemoryStream(delta, 0, length, false), output);
+			Assert.Equal(VcdiffResult.Incomplete, decoder.Decode(out var written));
 			Assert.Equal(output.Length, written);
 		}
 	}
@@ -201,19 +201,19 @@ public class ReviewDecoderTests
 		var delta = ReadPatchFile("patch.openvcdiff");
 		delta[0] ^= 0xFF;
 		using var output = new MemoryStream();
-		using var decoder = new VcDecoder(new MemoryStream(ReadPatchFile("a.test")), new MemoryStream(delta), output);
-		Assert.Equal(VcDiffResult.ERROR, decoder.Decode(out _));
+		using var decoder = new VcdiffDecoder(new MemoryStream(ReadPatchFile("a.test")), new MemoryStream(delta), output);
+		Assert.Equal(VcdiffResult.Error, decoder.Decode(out _));
 	}
 
 	[Fact]
 	public async Task LegacyDecoder_SecondDecode_ReturnsEod()
 	{
 		using var output = new MemoryStream();
-		using var decoder = new VcDecoder(new MemoryStream(ReadPatchFile("a.test")), new MemoryStream(ReadPatchFile("patch.openvcdiff")), output);
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out _));
-		Assert.Equal(VcDiffResult.EOD, decoder.Decode(out var written));
+		using var decoder = new VcdiffDecoder(new MemoryStream(ReadPatchFile("a.test")), new MemoryStream(ReadPatchFile("patch.openvcdiff")), output);
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out _));
+		Assert.Equal(VcdiffResult.Incomplete, decoder.Decode(out var written));
 		Assert.Equal(0, written);
-		Assert.Equal((VcDiffResult.EOD, 0L), await decoder.DecodeAsync());
+		Assert.Equal((VcdiffResult.Incomplete, 0L), await decoder.DecodeAsync());
 	}
 
 	[Fact]
@@ -225,15 +225,15 @@ public class ReviewDecoderTests
 		var delta = ReadPatchFile("checksum_interleaved.openvcdiff");
 
 		using (var output = new MemoryStream())
-		using (var decoder = new VcDecoder(new MemoryStream(dict), new MemoryStream(delta), output))
+		using (var decoder = new VcdiffDecoder(new MemoryStream(dict), new MemoryStream(delta), output))
 		{
-			Assert.Equal(VcDiffResult.ERROR, decoder.Decode(out _));
+			Assert.Equal(VcdiffResult.Error, decoder.Decode(out _));
 		}
 
 		using (var output = new MemoryStream())
-		using (var decoder = new VcDecoder(new MemoryStream(dict), new MemoryStream(delta), output, disableChecksums: true))
+		using (var decoder = new VcdiffDecoder(new MemoryStream(dict), new MemoryStream(delta), output, disableChecksums: true))
 		{
-			Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out _));
+			Assert.Equal(VcdiffResult.Success, decoder.Decode(out _));
 		}
 	}
 

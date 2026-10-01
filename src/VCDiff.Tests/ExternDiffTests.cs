@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using VCDiff.Decoders;
@@ -27,9 +27,9 @@ public class ExternDiffTests
 		targetStream.Position = 0;
 		deltaStream.Position = 0;
 
-		using var decoder = new VcDecoder(srcStream, deltaStream, outputStream);
+		using var decoder = new VcdiffDecoder(srcStream, deltaStream, outputStream);
 		var (result, _) = await decoder.DecodeAsync();
-		Assert.Equal(VcDiffResult.SUCCESS, result);
+		Assert.Equal(VcdiffResult.Success, result);
 		outputStream.Position = 0;
 		var outputHash = md5.ComputeHash(outputStream);
 		Assert.Equal(originalHash, outputHash);
@@ -53,8 +53,8 @@ public class ExternDiffTests
 		targetStream.Position = 0;
 		deltaStream.Position = 0;
 
-		using var decoder = new VcDecoder(srcStream, deltaStream, outputStream);
-		Assert.Equal(VcDiffResult.SUCCESS, decoder.Decode(out var bytesWritten));
+		using var decoder = new VcdiffDecoder(srcStream, deltaStream, outputStream);
+		Assert.Equal(VcdiffResult.Success, decoder.Decode(out var bytesWritten));
 		outputStream.Position = 0;
 		var outputHash = md5.ComputeHash(outputStream);
 		Assert.Equal(originalHash, outputHash);

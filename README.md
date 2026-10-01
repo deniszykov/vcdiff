@@ -34,8 +34,8 @@ while keeping its performance:
 - **Modern, focused targets** — `netcoreapp3.1` and `net8.0` only, with legacy `netstandard`
   targets and their `#if` fallbacks removed.
 - **Modern, allocation-conscious APIs** — configurable buffer pooling
-  (`VcEncoderOptions`/`VcDecoderOptions`) and a streaming span-based encode/decode API
-  (`VcDiffEncoder`/`VcDiffDecoder`).
+  (`VcdiffEncoderOptions`/`VcdiffDecoderOptions`) and a streaming span-based encode/decode API
+  (`VcdiffSpanEncoder`/`VcdiffSpanDecoder`).
 - **Same fast paths** — the upstream SIMD/unsafe encode and decode paths are preserved.
 
 The code in this repository was developed and reviewed with the assistance of LLM agents
@@ -55,7 +55,7 @@ This fork keeps the fast SIMD/unsafe encode and decode paths from upstream while
   | this fork | 116 KiB | 115 KiB | ~116 KiB |
 
   `VCDiff.dll` itself grows slightly because it now embeds the LZMA2 decoder, but the fork no longer pulls in SharpCompress's ~2.0 MiB `SharpCompress.dll`, so the deployed footprint drops by roughly 95%.
-- **Configurable buffer pooling**: `VcEncoderOptions` and `VcDecoderOptions` accept an `ArrayPool<byte>` (defaulting to `ArrayPool<byte>.Shared` when `null`) that is used for every internal `byte[]`/pinned buffer during encoding and decoding.
+- **Configurable buffer pooling**: `VcdiffEncoderOptions` and `VcdiffDecoderOptions` accept an `ArrayPool<byte>` (defaulting to `ArrayPool<byte>.Shared` when `null`) that is used for every internal `byte[]`/pinned buffer during encoding and decoding.
 
 ### Using the options classes
 
@@ -64,19 +64,19 @@ using System.Buffers;
 using VCDiff.Decoders;
 using VCDiff.Encoders;
 
-var encoderOptions = new VcEncoderOptions
+var encoderOptions = new VcdiffEncoderOptions
 {
     BlockSize = 32,
     BytePool = ArrayPool<byte>.Shared,
 };
-using var encoder = new VcEncoder(dictStream, targetStream, outputStream, encoderOptions);
+using var encoder = new VcdiffEncoder(dictStream, targetStream, outputStream, encoderOptions);
 
-var decoderOptions = new VcDecoderOptions
+var decoderOptions = new VcdiffDecoderOptions
 {
-    MaxTargetFileSize = 64 * 1024 * 1024,
+    MaxTargetWindowSize = 64 * 1024 * 1024,
     BytePool = ArrayPool<byte>.Shared,
 };
-using var decoder = new VcDecoder(dictStream, deltaStream, outputStream, decoderOptions);
+using var decoder = new VcdiffDecoder(dictStream, deltaStream, outputStream, decoderOptions);
 ```
 
 ## Usage
@@ -98,8 +98,8 @@ using (var dict   = File.OpenRead("fileA.bin"))
 using (var target = File.OpenRead("fileB.bin"))
 using (var delta  = File.Create("diff.bin"))
 {
-    using var encoder = new VcEncoder(dict, target, delta);
-    if (encoder.Encode() != VcDiffResult.SUCCESS)
+    using var encoder = new VcdiffEncoder(dict, target, delta);
+    if (encoder.Encode() != VcdiffResult.Success)
         throw new InvalidOperationException("Encoding failed.");
 }
 
@@ -108,8 +108,8 @@ using (var dict   = File.OpenRead("fileA.bin"))
 using (var delta  = File.OpenRead("diff.bin"))
 using (var target = File.Create("fileB.decoded.bin"))
 {
-    using var decoder = new VcDecoder(dict, delta, target);
-    if (decoder.Decode(out _) != VcDiffResult.SUCCESS)
+    using var decoder = new VcdiffDecoder(dict, delta, target);
+    if (decoder.Decode(out _) != VcdiffResult.Success)
         throw new InvalidOperationException("Decoding failed.");
 }
 ```
@@ -128,24 +128,24 @@ using VCDiff.Encoders;
 // until the encoder/decoder is disposed.
 
 // Encode: diff.bin = fileB.bin - fileA.bin
-using (var dictStream = VcDiff.ReadDictionary(File.OpenRead("fileA.bin")))
+using (var dictStream = VcdiffDictionary.Read(File.OpenRead("fileA.bin")))
 {
     ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
-    using var encoder = new VcDiffEncoder(dictionary);
+    using var encoder = new VcdiffSpanEncoder(dictionary);
     using var delta = File.Create("diff.bin");
     Encode(encoder, File.OpenRead("fileB.bin"), delta);
 }
 
 // Decode: fileB.bin = fileA.bin + diff.bin
-using (var dictStream = VcDiff.ReadDictionary(File.OpenRead("fileA.bin")))
+using (var dictStream = VcdiffDictionary.Read(File.OpenRead("fileA.bin")))
 {
     ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
-    using var decoder = new VcDiffDecoder(dictionary);
+    using var decoder = new VcdiffSpanDecoder(dictionary);
     using var target = File.Create("fileB.decoded.bin");
     Decode(decoder, File.OpenRead("diff.bin"), target);
 }
 
-static void Encode(VcDiffEncoder encoder, Stream source, Stream destination)
+static void Encode(VcdiffSpanEncoder encoder, Stream source, Stream destination)
 {
     var readBuf  = new byte[64 * 1024];
     var writeBuf = new byte[64 * 1024];
@@ -176,7 +176,7 @@ static void Encode(VcDiffEncoder encoder, Stream source, Stream destination)
     }
 }
 
-static void Decode(VcDiffDecoder decoder, Stream source, Stream destination)
+static void Decode(VcdiffSpanDecoder decoder, Stream source, Stream destination)
 {
     var readBuf  = new byte[64 * 1024];
     var writeBuf = new byte[64 * 1024];
@@ -232,9 +232,9 @@ void DoEncode() {
     using(FileStream output = new FileStream("...some output path", FileMode.Create, FileAccess.Write))
     using(FileStream dict = new FileStream("..dictionary / old file path", FileMode.Open, FileAccess.Read))
     using(FileStream target = new FileStream("..target data / new data path", FileMode.Open, FileAccess.Read)) {
-        VcEncoder coder = new VcEncoder(dict, target, output);
-        VcDiffResult result = coder.Encode(); //encodes with no checksum and not interleaved
-        if(result != VcDiffResult.SUCCESS) {
+        VcdiffEncoder coder = new VcdiffEncoder(dict, target, output);
+        VcdiffResult result = coder.Encode(); //encodes with no checksum and not interleaved
+        if(result != VcdiffResult.Success) {
             //error was not able to encode properly
         }
     }
@@ -245,10 +245,10 @@ void DoEncode() {
 Encoding with checksum or interleaved or both
 
 ```csharp
-encoder.Encode(interleaved: true, checksumFormat: ChecksumFormat.None);
-encoder.Encode(interleaved: true, checksumFormat: ChecksumFormat.SDCH);
-encoder.Encode(interleaved: false, checksumFormat: ChecksumFormat.SDCH);
-encoder.Encode(interleaved: false, checksumFormat: ChecksumFormat.Xdelta3); // xdelta3 checksums can not be interleaved
+encoder.Encode(interleaved: true, checksumFormat: WindowChecksumFormat.None);
+encoder.Encode(interleaved: true, checksumFormat: WindowChecksumFormat.Sdch);
+encoder.Encode(interleaved: false, checksumFormat: WindowChecksumFormat.Sdch);
+encoder.Encode(interleaved: false, checksumFormat: WindowChecksumFormat.Xdelta3); // xdelta3 checksums can not be interleaved
 ```
 
 Modifying the default chunk size for windows
@@ -256,23 +256,23 @@ Modifying the default chunk size for windows
 ```csharp
 int windowSize = 2; //in Megabytes. The default is 1MB window chunks.
 
-VcEncoder coder = new VcEncoder(dict, target, output, windowSize);
+VcdiffEncoder coder = new VcdiffEncoder(dict, target, output, windowSize);
 ```
 
 Modifying the default minimum copy encode size. Which means the match must be >= MinBlockSize in order to qualify as match for copying from dictionary file.
 
 ```csharp
-// chunkSize is the minimum copy encode size.
+// minMatchSize is the minimum copy encode size.
 // Default is 32 bytes. Lowering this can improve the delta compression for small files. 
 // It must be at least twice the block size.
-VcEncoder coder = new VcEncoder(dict, target, output, blockSize: 8, chunkSize: 16);
+VcdiffEncoder coder = new VcdiffEncoder(dict, target, output, blockSize: 8, minMatchSize: 16);
 ```
 
 Modifying the default BlockSize for hashing
 
 ```csharp
 // Increasing blockSize for large files with similar data can improve results.
-VcEncoder coder = new VcEncoder(dict, target, output, blockSize: 32);
+VcdiffEncoder coder = new VcdiffEncoder(dict, target, output, blockSize: 32);
 ```
 
 # Decoding Data
@@ -289,13 +289,13 @@ void DoDecode() {
     using (FileStream output = new FileStream("...some output path", FileMode.Create, FileAccess.Write))
     using (FileStream dict = new FileStream("..dictionary / old file path", FileMode.Open, FileAccess.Read))
     using (FileStream target = new FileStream("..delta encoded part", FileMode.Open, FileAccess.Read)) {
-        VcDecoder decoder = new VcDecoder(dict, target, output);
+        VcdiffDecoder decoder = new VcdiffDecoder(dict, target, output);
 
         // The header of the delta file must be available before the first call to decoder.Decode().
         long bytesWritten = 0;
-        VcDiffResult result = decoder.Decode(out bytesWritten);
+        VcdiffResult result = decoder.Decode(out bytesWritten);
 
-        if(result != VcDiffResult.SUCCESS) {
+        if(result != VcdiffResult.Success) {
             //error decoding
         }
 
@@ -304,7 +304,7 @@ void DoDecode() {
 }
 ```
 
-`VcDecoder` decodes the whole delta stream in one `Decode` call (a further call returns `VcDiffResult.EOD`). To decode a delta as it arrives, for example an interleaved delta received over the network, use the streaming `VcDiffDecoder` shown above: it accepts the delta in chunks of any size and emits target bytes as soon as they are decoded.
+`VcdiffDecoder` decodes the whole delta stream in one `Decode` call (a further call returns `VcdiffResult.Incomplete`). To decode a delta as it arrives, for example an interleaved delta received over the network, use the streaming `VcdiffSpanDecoder` shown above: it accepts the delta in chunks of any size and emits target bytes as soon as they are decoded.
 
 </p>
 </details>

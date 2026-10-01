@@ -11,7 +11,7 @@ namespace VCDiff;
 /// <summary>
 ///     Helpers for preparing VCDIFF dictionaries.
 /// </summary>
-public static class VcDiff
+public static class VcdiffDictionary
 {
     /// <summary>
     ///     Reads an entire dictionary <paramref name="stream" /> into a pooled
@@ -27,14 +27,14 @@ public static class VcDiff
     ///     A <see cref="RecyclableMemoryStream" /> positioned at the start. The caller owns the
     ///     returned stream and is responsible for disposing it. Pass its
     ///     <see cref="RecyclableMemoryStream.GetReadOnlySequence" /> to a
-    ///     <see cref="Encoders.VcDiffEncoder" /> or <see cref="Decoders.VcDiffDecoder" />.
+    ///     <see cref="Encoders.VcdiffSpanEncoder" /> or <see cref="Decoders.VcdiffSpanDecoder" />.
     /// </returns>
-    public static RecyclableMemoryStream ReadDictionary(Stream stream, string? tag = null, RecyclableMemoryStreamManager? manager = null)
+    public static RecyclableMemoryStream Read(Stream stream, string? tag = null, RecyclableMemoryStreamManager? manager = null)
 	{
 		if (stream == null)
 			throw new ArgumentNullException(nameof(stream));
 
-		var ms = (manager ?? DefaultMemoryStreamManager.Instance).GetStream(tag ?? nameof(VcDiff));
+		var ms = (manager ?? DefaultMemoryStreamManager.Instance).GetStream(tag ?? nameof(VcdiffDictionary));
 		try
 		{
 			// Read straight into the pooled blocks of the stream (IBufferWriter), with no

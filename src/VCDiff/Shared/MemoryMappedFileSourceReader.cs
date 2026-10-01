@@ -25,13 +25,13 @@ namespace VCDiff.Shared;
 ///         The dictionary is limited to 2 GiB (<see cref="int.MaxValue" /> bytes). The limit comes from the
 ///         encoder's block hash, which indexes blocks with an <see cref="int" />, and from <see cref="Read" />,
 ///         which addresses the mapped view through an <see cref="int" />-sized <see cref="Memory{T}" /> slice.
-///         This matches the existing <see cref="ReadOnlySequenceSource" /> reader.
+///         This matches the existing <see cref="SequenceSourceReader" /> reader.
 ///     </para>
 ///     <para>
 ///         The reader is not thread-safe: one encoder or decoder drives it from a single thread.
 ///     </para>
 /// </remarks>
-public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
+public sealed unsafe class MemoryMappedFileSourceReader : ISourceReader
 {
 	private readonly MemoryMappedFile? _file;
 	private readonly SafeMemoryMappedViewHandle? _handle;
@@ -50,7 +50,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	///     dictionary. This instance owns the mapping and the file, and disposes both.
 	/// </summary>
 	/// <param name="path">The path of the dictionary file.</param>
-	public MemoryMappedFileDictionaryReader(string path)
+	public MemoryMappedFileSourceReader(string path)
 	{
 		if (path == null)
 			throw new ArgumentNullException(nameof(path));
@@ -92,7 +92,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	/// <param name="file">The memory-mapped file whose start is the dictionary.</param>
 	/// <param name="length">The number of bytes to use from the start of <paramref name="file" />.</param>
 	/// <param name="leaveOpen">Whether to leave <paramref name="file" /> open when this instance is disposed.</param>
-	public MemoryMappedFileDictionaryReader(MemoryMappedFile file, long length, bool leaveOpen = false)
+	public MemoryMappedFileSourceReader(MemoryMappedFile file, long length, bool leaveOpen = false)
 	{
 		if (file == null)
 			throw new ArgumentNullException(nameof(file));
@@ -168,7 +168,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	public void CopyTo(long offset, Span<byte> destination)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(MemoryMappedFileDictionaryReader));
+			throw new ObjectDisposedException(nameof(MemoryMappedFileSourceReader));
 
 		if (offset < 0 || offset + destination.Length > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));
@@ -184,7 +184,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	public bool SequenceEqual(long offset, byte* other, int length)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(MemoryMappedFileDictionaryReader));
+			throw new ObjectDisposedException(nameof(MemoryMappedFileSourceReader));
 
 		if (offset < 0 || length < 0 || offset + length > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));
@@ -200,7 +200,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	public long MatchForward(long offset, byte* other, long maxBytes)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(MemoryMappedFileDictionaryReader));
+			throw new ObjectDisposedException(nameof(MemoryMappedFileSourceReader));
 
 		if (maxBytes < 0)
 			throw new ArgumentOutOfRangeException(nameof(maxBytes));
@@ -221,7 +221,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	public long MatchBackward(long offset, byte* otherEnd, long maxBytes)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(MemoryMappedFileDictionaryReader));
+			throw new ObjectDisposedException(nameof(MemoryMappedFileSourceReader));
 
 		if (maxBytes < 0)
 			throw new ArgumentOutOfRangeException(nameof(maxBytes));
@@ -238,7 +238,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 	public ReadOnlySequence<byte> Read(long offset, long bytesToRead)
 	{
 		if (this._disposed)
-			throw new ObjectDisposedException(nameof(MemoryMappedFileDictionaryReader));
+			throw new ObjectDisposedException(nameof(MemoryMappedFileSourceReader));
 
 		if (offset < 0 || bytesToRead < 0 || offset + bytesToRead > this.Length)
 			throw new ArgumentOutOfRangeException(nameof(offset));

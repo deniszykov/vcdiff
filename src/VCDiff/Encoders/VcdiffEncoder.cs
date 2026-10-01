@@ -14,7 +14,7 @@ namespace VCDiff.Encoders;
 /// <summary>
 ///     A simple VCDIFF Encoder class.
 /// </summary>
-public class VcEncoder : IDisposable
+public class VcdiffEncoder : IDisposable
 {
 	private readonly ArrayPool<byte> _bytePool;
 	private readonly RecyclableMemoryStreamManager _manager;
@@ -30,8 +30,8 @@ public class VcEncoder : IDisposable
     /// <param name="target">The target to create the diff from.</param>
     /// <param name="outputStream">The stream to write the diff into.</param>
     /// <param name="options">
-    ///     The encoder options. See <see cref="VcEncoderOptions" />. <see cref="VcEncoderOptions.Interleaved" /> and
-    ///     <see cref="VcEncoderOptions.ChecksumFormat" /> are ignored: this encoder takes the output format as
+    ///     The encoder options. See <see cref="VcdiffEncoderOptions" />. <see cref="VcdiffEncoderOptions.Interleaved" /> and
+    ///     <see cref="VcdiffEncoderOptions.WindowChecksumFormat" /> are ignored: this encoder takes the output format as
     ///     arguments of <see cref="Encode" /> and <see cref="EncodeAsync" />.
     /// </param>
     /// <remarks>
@@ -40,7 +40,7 @@ public class VcEncoder : IDisposable
     ///     (<see cref="MemoryStream.TryGetBuffer" />), its memory is used in place instead of being copied, so
     ///     such a stream must not be modified or disposed until this encoder is disposed.
     /// </remarks>
-    public VcEncoder(Stream source, Stream target, Stream outputStream, VcEncoderOptions options)
+    public VcdiffEncoder(Stream source, Stream target, Stream outputStream, VcdiffEncoderOptions options)
 	{
 		this._bytePool = options.BytePoolOrDefault;
 		this._manager = options.MemoryStreamManagerOrDefault;
@@ -57,22 +57,22 @@ public class VcEncoder : IDisposable
     /// <param name="source">The dictionary (source file).</param>
     /// <param name="target">The target to create the diff from.</param>
     /// <param name="outputStream">The stream to write the diff into.</param>
-    /// <param name="maxBufferSize">The maximum buffer size for window chunking in megabytes (MiB).</param>
+    /// <param name="maxWindowSizeMiB">The maximum buffer size for window chunking in megabytes (MiB).</param>
     /// <param name="blockSize">The block size to use. Must be an even number; a power of two is recommended.</param>
-    /// <param name="chunkSize">The minimum size of a string match that is worth putting into a COPY.</param>
-    /// <param name="rollingHash">A reusable <see cref="RollingHash" /> instance the caller owns.</param>
-    public VcEncoder
-		(Stream source, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
-		: this(source, target, outputStream, new VcEncoderOptions {
-			MaxBufferSize = maxBufferSize,
+    /// <param name="minMatchSize">The minimum size of a string match that is worth putting into a COPY.</param>
+    /// <param name="rabinKarpHash">A reusable <see cref="RabinKarpHash" /> instance the caller owns.</param>
+    public VcdiffEncoder
+		(Stream source, Stream target, Stream outputStream, int maxWindowSizeMiB = 1, int blockSize = 16, int minMatchSize = 0, RabinKarpHash? rabinKarpHash = null)
+		: this(source, target, outputStream, new VcdiffEncoderOptions {
+			MaxWindowSizeMiB = maxWindowSizeMiB,
 			BlockSize = blockSize,
-			ChunkSize = chunkSize,
-			RollingHash = rollingHash
+			MinMatchSize = minMatchSize,
+			RabinKarpHash = rabinKarpHash
 		})
 	{
 	}
 
-	private ReadOnlySequenceSource OpenSource(Stream source)
+	private SequenceSourceReader OpenSource(Stream source)
 	{
 		// The block hash needs random access to the whole dictionary, so it has to be kept in memory.
 		// Memory backed streams already are: reference their buffers instead of copying them.
@@ -81,11 +81,11 @@ public class VcEncoder : IDisposable
 			var start = recyclable.Position;
 			var length = recyclable.Length;
 			if (start >= length)
-				return new ReadOnlySequenceSource(ReadOnlySequence<byte>.Empty);
+				return new SequenceSourceReader(ReadOnlySequence<byte>.Empty);
 
 			var sequence = recyclable.GetReadOnlySequence().Slice(start);
 			recyclable.Position = length; // consume the source as CopyTo would
-			return new ReadOnlySequenceSource(sequence);
+			return new SequenceSourceReader(sequence);
 		}
 
 		// A writable MemoryStream may still be changed by the caller, so only a read-only one is referenced.
@@ -94,18 +94,18 @@ public class VcEncoder : IDisposable
 			var start = memory.Position;
 			var length = memory.Length;
 			if (start >= length)
-				return new ReadOnlySequenceSource(ReadOnlySequence<byte>.Empty);
+				return new SequenceSourceReader(ReadOnlySequence<byte>.Empty);
 
 			var sequence = new ReadOnlySequence<byte>(segment.Array, segment.Offset + (int)start, (int)(length - start));
 			memory.Position = length; // consume the source as CopyTo would
-			return new ReadOnlySequenceSource(sequence);
+			return new SequenceSourceReader(sequence);
 		}
 
-		var sourceCopy = this._manager.GetStream(nameof(VcEncoder));
+		var sourceCopy = this._manager.GetStream(nameof(VcdiffEncoder));
 		try
 		{
 			source.CopyTo(sourceCopy);
-			return new ReadOnlySequenceSource(sourceCopy.GetReadOnlySequence(), sourceCopy.Dispose);
+			return new SequenceSourceReader(sourceCopy.GetReadOnlySequence(), sourceCopy.Dispose);
 		}
 		catch
 		{
@@ -120,20 +120,20 @@ public class VcEncoder : IDisposable
     /// <param name="interleaved">Whether to output in SDCH interleaved diff format.</param>
     /// <param name="checksumFormat">
     ///     Whether to include Adler32 checksums for encoded data windows. If interleaved is true,
-    ///     <see cref="ChecksumFormat.Xdelta3" />
+    ///     <see cref="WindowChecksumFormat.Xdelta3" />
     ///     is not supported.
     /// </param>
     /// <param name="progress">Reports an estimate of the encoding progress. Value if 0 to 1.</param>
     /// <returns>
-    ///     <see cref="VcDiffResult.SUCCESS" /> if successful, <see cref="VcDiffResult.ERROR" /> if the sourceStream or target
+    ///     <see cref="VcdiffResult.Success" /> if successful, <see cref="VcdiffResult.Error" /> if the sourceStream or target
     ///     are zero-length.
     /// </returns>
-    /// <exception cref="ArgumentException">If interleaved is true, and <see cref="ChecksumFormat.Xdelta3" /> is chosen.</exception>
-    public VcDiffResult Encode(bool interleaved = false, ChecksumFormat checksumFormat = ChecksumFormat.None, IProgress<float>? progress = null)
+    /// <exception cref="ArgumentException">If interleaved is true, and <see cref="WindowChecksumFormat.Xdelta3" /> is chosen.</exception>
+    public VcdiffResult Encode(bool interleaved = false, WindowChecksumFormat checksumFormat = WindowChecksumFormat.None, IProgress<float>? progress = null)
 	{
 		EncoderSession.ValidateFormat(interleaved, checksumFormat);
 		if (!this.BeginEncode())
-			return VcDiffResult.ERROR;
+			return VcdiffResult.Error;
 
 		this._outputStream.Write(EncoderSession.GetFileHeader(interleaved, checksumFormat).Span);
 
@@ -153,7 +153,7 @@ public class VcEncoder : IDisposable
 				progress?.Report((float)this._targetData.Position / this.TargetLength);
 			}
 
-			return VcDiffResult.SUCCESS;
+			return VcdiffResult.Success;
 		}
 		finally
 		{
@@ -169,20 +169,20 @@ public class VcEncoder : IDisposable
     /// <param name="interleaved">Whether to output in SDCH interleaved diff format.</param>
     /// <param name="checksumFormat">
     ///     Whether to include Adler32 checksums for encoded data windows. If interleaved is true,
-    ///     <see cref="ChecksumFormat.Xdelta3" />
+    ///     <see cref="WindowChecksumFormat.Xdelta3" />
     ///     is not supported.
     /// </param>
     /// <param name="progress">Reports an estimate of the encoding progress. Value if 0 to 1.</param>
     /// <returns>
-    ///     <see cref="VcDiffResult.SUCCESS" /> if successful, <see cref="VcDiffResult.ERROR" /> if the sourceStream or target
+    ///     <see cref="VcdiffResult.Success" /> if successful, <see cref="VcdiffResult.Error" /> if the sourceStream or target
     ///     are zero-length.
     /// </returns>
-    /// <exception cref="ArgumentException">If interleaved is true, and <see cref="ChecksumFormat.Xdelta3" /> is chosen.</exception>
-    public async Task<VcDiffResult> EncodeAsync(bool interleaved = false, ChecksumFormat checksumFormat = ChecksumFormat.None, IProgress<float>? progress = null)
+    /// <exception cref="ArgumentException">If interleaved is true, and <see cref="WindowChecksumFormat.Xdelta3" /> is chosen.</exception>
+    public async Task<VcdiffResult> EncodeAsync(bool interleaved = false, WindowChecksumFormat checksumFormat = WindowChecksumFormat.None, IProgress<float>? progress = null)
 	{
 		EncoderSession.ValidateFormat(interleaved, checksumFormat);
 		if (!this.BeginEncode())
-			return VcDiffResult.ERROR;
+			return VcdiffResult.Error;
 
 		await this._outputStream.WriteAsync(EncoderSession.GetFileHeader(interleaved, checksumFormat));
 
@@ -202,7 +202,7 @@ public class VcEncoder : IDisposable
 				progress?.Report((float)this._targetData.Position / this.TargetLength);
 			}
 
-			return VcDiffResult.SUCCESS;
+			return VcdiffResult.Success;
 		}
 		finally
 		{
@@ -255,7 +255,7 @@ public class VcEncoder : IDisposable
 		return total;
 	}
 
-	// A window never spans more than the target, so don't rent a full MaxBufferSize buffer for a small target.
+	// A window never spans more than the target, so don't rent a full MaxWindowSizeMiB buffer for a small target.
 	private int GetWindowLength()
 	{
 		return (int)Math.Max(1, Math.Min(this._session.WindowSize, this.TargetLength));

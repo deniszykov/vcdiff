@@ -12,8 +12,8 @@ Two types implement the contract:
 
 | Type | Direction | Method |
 |------|-----------|--------|
-| `VCDiff.Encoders.VcDiffEncoder` | target bytes → delta bytes | `Encode(...)` |
-| `VCDiff.Decoders.VcDiffDecoder` | delta bytes → target bytes | `Decode(...)` |
+| `VCDiff.Encoders.VcdiffSpanEncoder` | target bytes → delta bytes | `Encode(...)` |
+| `VCDiff.Decoders.VcdiffSpanDecoder` | delta bytes → target bytes | `Decode(...)` |
 
 Both are **stateful and not thread-safe**. Use one instance per logical stream, and dispose
 it to unpin the dictionary and release pooled buffers.
@@ -56,35 +56,35 @@ OperationStatus Encode(
 ## 3. Constructors and options
 
 ```csharp
-VcDiffEncoder(ReadOnlySequence<byte> dictionary, VcEncoderOptions? options = null);
-VcDiffDecoder(ReadOnlySequence<byte> dictionary, VcDecoderOptions? options = null);
+VcdiffSpanEncoder(ReadOnlySequence<byte> dictionary, VcdiffEncoderOptions? options = null);
+VcdiffSpanDecoder(ReadOnlySequence<byte> dictionary, VcdiffDecoderOptions? options = null);
 ```
 
 The dictionary is `System.Buffers.ReadOnlySequence<byte>`, so it may be backed by a single
 array, a `Memory<byte>`, or multiple segments (e.g. the result of
 `RecyclableMemoryStream.GetReadOnlySequence()` or a `PipeReader`).
 
-### 3.1 `VcEncoderOptions`
+### 3.1 `VcdiffEncoderOptions`
 
 | Property | Default | Meaning |
 |----------|---------|---------|
-| `MaxBufferSize` | `1` | Target **window** size in MiB. The encoder is block-oriented and emits one window per `Done`. |
+| `MaxWindowSizeMiB` | `1` | Target **window** size in MiB. The encoder is block-oriented and emits one window per `Done`. |
 | `BlockSize` | `16` | Block size for hashing; must be even. |
-| `ChunkSize` | `0` (→ `2 * BlockSize`) | Minimum match length worth a `COPY`; must be ≥ `2 * BlockSize`. |
+| `MinMatchSize` | `0` (→ `2 * BlockSize`) | Minimum match length worth a `COPY`; must be ≥ `2 * BlockSize`. |
 | `Interleaved` | `false` | Emit the SDCH interleaved format. |
-| `ChecksumFormat` | `None` | `None`, `SDCH`, or `Xdelta3` window checksum. `Xdelta3` + `Interleaved` throws. |
-| `RollingHash` | `null` | Reusable `RollingHash` (caller owns it); otherwise one is created internally. |
+| `WindowChecksumFormat` | `None` | `None`, `Sdch`, or `Xdelta3` window checksum. `Xdelta3` + `Interleaved` throws. |
+| `RabinKarpHash` | `null` | Reusable `RabinKarpHash` (caller owns it); otherwise one is created internally. |
 | `BytePool` | `ArrayPool<byte>.Shared` | Pool used for internal buffers. |
 | `MemoryStreamManager` | library default | `RecyclableMemoryStreamManager` for the pooled streams that hold encoded windows. |
 
-### 3.2 `VcDecoderOptions`
+### 3.2 `VcdiffDecoderOptions`
 
 | Property | Default | Meaning |
 |----------|---------|---------|
-| `MaxTargetFileSize` | `67108864` (64 MiB) | Maximum target window size in bytes. |
+| `MaxTargetWindowSize` | `67108864` (64 MiB) | Maximum target window size in bytes. |
 | `DisableChecksums` | `false` | Skip window checksum verification. |
 | `BytePool` | `ArrayPool<byte>.Shared` | Pool used for internal buffers. |
-| `MemoryStreamManager` | library default | `RecyclableMemoryStreamManager` used by `VcDecoder` to buffer a non-seekable dictionary stream. |
+| `MemoryStreamManager` | library default | `RecyclableMemoryStreamManager` used by `VcdiffDecoder` to buffer a non-seekable dictionary stream. |
 
 ## 4. Dictionary handling
 
@@ -106,13 +106,13 @@ delta, so it must be supplied out-of-band to both encoder and decoder.
 ### 4.1 Loading a dictionary from a `Stream`
 
 ```csharp
-using var dictStream = VcDiff.ReadDictionary(fileStream); // RecyclableMemoryStream
+using var dictStream = VcdiffDictionary.Read(fileStream); // RecyclableMemoryStream
 ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
 
-using var encoder = new VcDiffEncoder(dictionary, new VcEncoderOptions { ChecksumFormat = ChecksumFormat.SDCH });
+using var encoder = new VcdiffSpanEncoder(dictionary, new VcdiffEncoderOptions { WindowChecksumFormat = WindowChecksumFormat.Sdch });
 ```
 
-`VcDiff.ReadDictionary(Stream, string? tag = null, RecyclableMemoryStreamManager? manager = null)`
+`VcdiffDictionary.Read(Stream, string? tag = null, RecyclableMemoryStreamManager? manager = null)`
 reads an entire stream into a pooled `Microsoft.IO.RecyclableMemoryStream` (rented from `manager`, or a
 library-wide default), i.e. into many small pooled blocks rather than one large array. The caller owns the returned stream and must dispose it **after** the
 encoder/decoder that uses its sequence.
@@ -125,7 +125,7 @@ Feed target chunks with `isFinal: false`, then issue one final call with an empt
 `isFinal: true`.
 
 ```csharp
-static void Encode(VcDiffEncoder encoder, ReadOnlySpan<byte> target, Stream sink, int inChunk)
+static void Encode(VcdiffSpanEncoder encoder, ReadOnlySpan<byte> target, Stream sink, int inChunk)
 {
     Span<byte> outBuf = new byte[8192];
 
@@ -163,7 +163,7 @@ static void Encode(VcDiffEncoder encoder, ReadOnlySpan<byte> target, Stream sink
 Feed delta chunks with `isFinal: false`, then finish with an empty input and `isFinal: true`.
 
 ```csharp
-static void Decode(VcDiffDecoder decoder, ReadOnlySpan<byte> delta, Stream sink, int inChunk)
+static void Decode(VcdiffSpanDecoder decoder, ReadOnlySpan<byte> delta, Stream sink, int inChunk)
 {
     Span<byte> outBuf = new byte[8192];
 
@@ -204,16 +204,16 @@ static void Decode(VcDiffDecoder decoder, ReadOnlySpan<byte> delta, Stream sink,
 
 ## 7. Compatibility
 
-- `VcDiffEncoder` produces **byte-identical** output to `VcEncoder` for the same options
+- `VcdiffSpanEncoder` produces **byte-identical** output to `VcdiffEncoder` for the same options
   (window boundaries are the same).
-- `VcDiffDecoder` decodes every delta the legacy decoder accepts, including external
+- `VcdiffSpanDecoder` decodes every delta the legacy decoder accepts, including external
   xdelta3 (`-S none`) and open-vcdiff/SDCH patches — interleaved, checksummed, app-header,
   and LZMA/XZ secondary-compressed variants.
 
 ## 8. Format notes
 
 - VCDIFF is **window-based**; each window is a “block”. The encoder emits one window per
-  `Done`, so streaming latency is bounded by `VcEncoderOptions.MaxBufferSize`.
+  `Done`, so streaming latency is bounded by `VcdiffEncoderOptions.MaxWindowSizeMiB`.
 - `Interleaved` (SDCH) deltas stream their body instruction-by-instruction; non-interleaved
   deltas require the full window body to be buffered before decoding (the decoder does this
   transparently).
@@ -230,13 +230,13 @@ with the dictionary.
 |------|------|-------|
 | Dictionary | none (referenced in place) | caller's memory, pinned |
 | Encoder dictionary index | about 1.5–2.5 × the dictionary length for `BlockSize` 16 (a hash table of `int` with one slot per 4 dictionary bytes, rounded up to a power of two, plus two `int` per block) | unmanaged, freed on `Dispose` |
-| Encoder target window | `MaxBufferSize` MiB | `BytePool` |
+| Encoder target window | `MaxWindowSizeMiB` MiB | `BytePool` |
 | Encoder window sections and pending output | up to one encoded window | pooled `RecyclableMemoryStream` blocks |
 | Decoder input buffer | 16 KiB (grows only for an oversized file header) | `BytePool` |
 | Decoder window sections (non-interleaved) | the delta of one window | `BytePool` |
-| Decoder target window | the target window length declared by the delta, at most `MaxTargetFileSize` | `BytePool` |
+| Decoder target window | the target window length declared by the delta, at most `MaxTargetWindowSize` | `BytePool` |
 
-The decoder rejects a window whose target length or section lengths exceed `MaxTargetFileSize`,
+The decoder rejects a window whose target length or section lengths exceed `MaxTargetWindowSize`,
 so a corrupt or hostile delta cannot make it rent an arbitrarily large buffer.
 
 The encoder index is the one allocation proportional to the dictionary. It is required for

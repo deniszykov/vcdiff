@@ -11,7 +11,7 @@ namespace VCDiff.Shared;
 ///     encoder's block matching. The decoder calls <see cref="CopyTo" /> once per COPY instruction, never per byte;
 ///     the encoder's pointer-taking members compare dictionary bytes against the pinned target buffer in place.
 /// </summary>
-public unsafe interface IDictionaryReader : IDisposable
+public unsafe interface ISourceReader : IDisposable
 {
 	/// <summary>
 	///     The dictionary length in bytes.

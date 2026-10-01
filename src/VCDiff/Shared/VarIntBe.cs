@@ -4,7 +4,6 @@
 using System;
 using System.Buffers;
 using System.IO;
-using VCDiff.Includes;
 
 namespace VCDiff.Shared;
 
@@ -24,12 +23,13 @@ internal static class VarIntBe
 	public const int MAX_INT64_LENGTH = 9;
 
 	/// <summary>
-	///     Parses a varint holding an <see cref="int" />. Returns <see cref="VcDiffResult.EOD" /> when
-	///     <paramref name="sin" /> ends inside the varint and <see cref="VcDiffResult.ERROR" /> when it overflows.
+	///     Parses a varint holding an <see cref="int" />. Returns <see cref="ParseResult.NeedMoreData" /> when
+	///     <paramref name="sin" /> ends inside the varint and <see cref="ParseResult.Error" /> when it overflows.
 	/// </summary>
-	public static int ParseInt32(ReadOnlySpan<byte> sin, out int bytesConsumed)
+	public static ParseResult TryParseInt32(ReadOnlySpan<byte> sin, out int value, out int bytesConsumed)
 	{
 		bytesConsumed = 0;
+		value = 0;
 		var result = 0;
 		var index = 0;
 
@@ -41,46 +41,48 @@ internal static class VarIntBe
 			if ((currentByte & 0x80) == 0)
 			{
 				bytesConsumed = index + 1;
-				return result;
+				value = result;
+				return ParseResult.Success;
 			}
 
 			if (result > int.MaxValue >> 7)
 			{
 				bytesConsumed = index + 1;
-				return (int)VcDiffResult.ERROR;
+				return ParseResult.Error;
 			}
 
 			result = result << 7;
 			index++;
 		}
 
-		return (int)VcDiffResult.EOD;
+		return ParseResult.NeedMoreData;
 	}
 
 	/// <summary>
 	///     Parses a varint holding an <see cref="int" /> from the start of <paramref name="sequence" />, which may split
-	///     it across segments. See <see cref="ParseInt32(ReadOnlySpan{byte}, out int)" />.
+	///     it across segments. See <see cref="TryParseInt32(ReadOnlySpan{byte}, out int, out int)" />.
 	/// </summary>
-	public static int ParseInt32(in ReadOnlySequence<byte> sequence, out int bytesConsumed)
+	public static ParseResult TryParseInt32(in ReadOnlySequence<byte> sequence, out int value, out int bytesConsumed)
 	{
 		var first = sequence.FirstSpan;
 		if (first.Length >= MAX_INT32_LENGTH || sequence.IsSingleSegment)
-			return ParseInt32(first, out bytesConsumed);
+			return TryParseInt32(first, out value, out bytesConsumed);
 
 		// The varint straddles segments: consolidate its (at most MAX_INT32_LENGTH) bytes on the stack.
 		Span<byte> varint = stackalloc byte[MAX_INT32_LENGTH];
 		var length = (int)Math.Min(MAX_INT32_LENGTH, sequence.Length);
 		sequence.Slice(0, length).CopyTo(varint);
-		return ParseInt32(varint.Slice(0, length), out bytesConsumed);
+		return TryParseInt32(varint.Slice(0, length), out value, out bytesConsumed);
 	}
 
 	/// <summary>
-	///     Parses a varint holding a <see cref="long" />. Returns <see cref="VcDiffResult.EOD" /> when
-	///     <paramref name="sin" /> ends inside the varint and <see cref="VcDiffResult.ERROR" /> when it overflows.
+	///     Parses a varint holding a <see cref="long" />. Returns <see cref="ParseResult.NeedMoreData" /> when
+	///     <paramref name="sin" /> ends inside the varint and <see cref="ParseResult.Error" /> when it overflows.
 	/// </summary>
-	public static long ParseInt64(ReadOnlySpan<byte> sin, out int bytesConsumed)
+	public static ParseResult TryParseInt64(ReadOnlySpan<byte> sin, out long value, out int bytesConsumed)
 	{
 		bytesConsumed = 0;
+		value = 0;
 		long result = 0;
 		var index = 0;
 
@@ -92,20 +94,21 @@ internal static class VarIntBe
 			if ((currentByte & 0x80) == 0)
 			{
 				bytesConsumed = index + 1;
-				return result;
+				value = result;
+				return ParseResult.Success;
 			}
 
 			if (result > long.MaxValue >> 7)
 			{
 				bytesConsumed = index + 1;
-				return (long)VcDiffResult.ERROR;
+				return ParseResult.Error;
 			}
 
 			result = result << 7;
 			index++;
 		}
 
-		return (long)VcDiffResult.EOD;
+		return ParseResult.NeedMoreData;
 	}
 
 	/// <summary>

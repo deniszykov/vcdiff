@@ -1,4 +1,4 @@
-﻿// Copyright (c) Metric and the Snowflake Authors.
+// Copyright (c) Metric and the Snowflake Authors.
 // Licensed under the Apache License, Version 2.0.
 
 namespace VCDiff.Shared;
@@ -6,7 +6,7 @@ namespace VCDiff.Shared;
 /// <summary>
 ///     Which checksum format to output.
 /// </summary>
-public enum ChecksumFormat
+public enum WindowChecksumFormat
 {
     /// <summary>
     ///     Do not emit a checksum.
@@ -15,7 +15,7 @@ public enum ChecksumFormat
     /// <summary>
     ///     Emit a Google compatible SDCH checksum.
     /// </summary>
-    SDCH,
+    Sdch,
     /// <summary>
     ///     Emit an Xdelta3 checksum.
     /// </summary>
