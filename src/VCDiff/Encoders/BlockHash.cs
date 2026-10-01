@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using VCDiff.Shared;
 
@@ -26,14 +27,14 @@ internal sealed unsafe class BlockHash : IDisposable
 	}
 
 	private const int MAX_PROBES = 16;
-	private const int MAX_STACK_STRADDLE = 256;
+	private const int MAX_BYTES_PER_DICTIONARY_READ = 1 * 1024 * 1024; // 1Mib
 	private readonly int blocksCount;
 	internal readonly int BlockSize;
 	private readonly RollingHash hasher;
 	private readonly ulong hashTableMask;
 
 	private readonly int maxMatchesToCheck;
-	private readonly DictionarySource source;
+	private readonly IDictionaryReader dictionaryReader;
 	private bool disposed;
 	private NativeAllocation<int> hashTable;
 	private int lastBlockAdded;
@@ -43,20 +44,20 @@ internal sealed unsafe class BlockHash : IDisposable
     /// <summary>
     ///     Create a hash lookup table for the data
     /// </summary>
-    /// <param name="source">the data to create the table for</param>
+    /// <param name="dictionaryReader">the data to create the table for</param>
     /// <param name="hasher">the hashing method</param>
     /// <param name="blockSize">The block size to use</param>
-    public BlockHash(DictionarySource source, RollingHash hasher, int blockSize = 16)
+    public BlockHash(IDictionaryReader dictionaryReader, RollingHash hasher, int blockSize = 16)
 	{
 		this.BlockSize = blockSize;
 		this.maxMatchesToCheck = this.BlockSize >= 32 ? 32 : 32 * (32 / this.BlockSize);
 		this.hasher = hasher;
-		this.source = source;
+		this.dictionaryReader = dictionaryReader;
 
 		var tableSize = this.CalcTableSize();
 		if (tableSize == 0) throw new Exception("BlockHash Table Size is Invalid == 0");
 
-		this.blocksCount = (int)(source.Length / blockSize);
+		this.blocksCount = (int)(dictionaryReader.Length / blockSize);
 
 		this.hashTableMask = (ulong)tableSize - 1;
 
@@ -82,7 +83,7 @@ internal sealed unsafe class BlockHash : IDisposable
 
 	private long CalcTableSize()
 	{
-		var min = this.source.Length / sizeof(int) + 1;
+		var min = this.dictionaryReader.Length / sizeof(int) + 1;
 		long size = 1;
 
 		while (size < min)
@@ -94,7 +95,7 @@ internal sealed unsafe class BlockHash : IDisposable
 
 		if ((size & (size - 1)) != 0) return 0;
 
-		if (this.source.Length > 0 && size > min * 2) return 0;
+		if (this.dictionaryReader.Length > 0 && size > min * 2) return 0;
 
 		return size;
 	}
@@ -105,23 +106,60 @@ internal sealed unsafe class BlockHash : IDisposable
     [SkipLocalsInit]
     public void AddAllBlocks()
 	{
-		// Holds a block that straddles two dictionary segments. Block sizes are small in practice.
-		Span<byte> straddle = this.BlockSize <= MAX_STACK_STRADDLE ? stackalloc byte[this.BlockSize] : new byte[this.BlockSize];
-		fixed (byte* straddlePtr = straddle)
+		byte* straddle = stackalloc byte[this.BlockSize];
+		var carryOverBytes = 0;
+		var nextBlock = this.lastBlockAdded + 1;
+
+		while (nextBlock < this.blocksCount)
 		{
-			for (var block = this.lastBlockAdded + 1; block < this.blocksCount; block++)
+			// Read a whole number of blocks so a chunk never ends mid-block; the straddle buffer only
+			// ever bridges two segments within one chunk.
+			var blocksRemaining = this.blocksCount - nextBlock;
+			var blocksInChunk = Math.Min(blocksRemaining, Math.Max(1, MAX_BYTES_PER_DICTIONARY_READ / this.BlockSize));
+			var startingOffset = (long)nextBlock * this.BlockSize;
+			var bytesToRead = (long)blocksInChunk * this.BlockSize;
+
+			foreach (var segment in this.dictionaryReader.Read(startingOffset, bytesToRead))
 			{
-				var offset = (long)block * this.BlockSize;
-				var ptr = this.source.GetPointer(offset, out var available);
-				if (available < this.BlockSize)
+				using var pinnedMemory = segment.Pin();
+				var pinnedMemoryPtr = (byte*)pinnedMemory.Pointer;
+				var pinnedMemoryOffset = 0;
+
+				// Finish the block carried over from the previous segment.
+				if (carryOverBytes > 0)
 				{
-					this.source.CopyTo(offset, straddle);
-					ptr = straddlePtr;
+					var toCopyIntoStraddle = Math.Min(segment.Length, this.BlockSize - carryOverBytes);
+					Unsafe.CopyBlockUnaligned(straddle + carryOverBytes, pinnedMemoryPtr, (uint)toCopyIntoStraddle);
+					pinnedMemoryOffset += toCopyIntoStraddle;
+					carryOverBytes += toCopyIntoStraddle;
+
+					if (carryOverBytes < this.BlockSize)
+						continue; // segment exhausted before the block was completed
 				}
 
-				this.AddBlock(this.hasher.Hash(ptr, this.BlockSize));
+				if (carryOverBytes == this.BlockSize)
+				{
+					this.AddBlock(this.hasher.Hash(straddle, this.BlockSize));
+					carryOverBytes = 0;
+				}
+
+				// Hash whole blocks directly from the segment.
+				while (segment.Length - pinnedMemoryOffset >= this.BlockSize)
+				{
+					this.AddBlock(this.hasher.Hash(pinnedMemoryPtr + pinnedMemoryOffset, this.BlockSize));
+					pinnedMemoryOffset += this.BlockSize;
+				}
+
+				// Carry the partial tail over to the next segment.
+				carryOverBytes = segment.Length - pinnedMemoryOffset;
+				if (carryOverBytes > 0)
+					Unsafe.CopyBlockUnaligned(straddle, pinnedMemoryPtr + pinnedMemoryOffset, (uint)carryOverBytes);
 			}
+
+			nextBlock = this.lastBlockAdded + 1;
 		}
+
+		Debug.Assert(carryOverBytes == 0, "Every block lies within one chunk.");
 	}
 
     /// <summary>
@@ -153,14 +191,14 @@ internal sealed unsafe class BlockHash : IDisposable
 			var limitBytesToLeft = Math.Min(sourceMatchOffset, targetMatchOffset);
 			if (limitBytesToLeft > 0)
 			{
-				var leftMatching = this.source.MatchBackward(sourceMatchOffset, candidatePtr, limitBytesToLeft);
+				var leftMatching = this.dictionaryReader.MatchBackward(sourceMatchOffset, candidatePtr, limitBytesToLeft);
 				sourceMatchOffset -= leftMatching;
 				targetMatchOffset -= leftMatching;
 				matchSize += leftMatching;
 			}
 
-			var rightLimit = Math.Min(this.source.Length - sourceMatchEnd, targetLength - candidateEnd);
-			if (rightLimit > 0) matchSize += this.source.MatchForward(sourceMatchEnd, targetPtr + candidateEnd, rightLimit);
+			var rightLimit = Math.Min(this.dictionaryReader.Length - sourceMatchEnd, targetLength - candidateEnd);
+			if (rightLimit > 0) matchSize += this.dictionaryReader.MatchForward(sourceMatchEnd, targetPtr + candidateEnd, rightLimit);
 
 			m.ReplaceIfBetterMatch(matchSize, sourceMatchOffset, targetMatchOffset);
 		}
@@ -198,7 +236,7 @@ internal sealed unsafe class BlockHash : IDisposable
 	{
 		var probes = 0;
 		var next = this.nextBlockTable.Pointer;
-		while (blockNumber >= 0 && !this.source.SequenceEqual((long)blockNumber * this.BlockSize, candidatePtr, this.BlockSize))
+		while (blockNumber >= 0 && !this.dictionaryReader.SequenceEqual((long)blockNumber * this.BlockSize, candidatePtr, this.BlockSize))
 		{
 			if (++probes > MAX_PROBES) return -1;
 

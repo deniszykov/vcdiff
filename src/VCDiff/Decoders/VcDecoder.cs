@@ -239,12 +239,23 @@ public class VcDecoder : IDisposable
 
 		// In-memory streams are read in place through their buffers.
 		if (source is RecyclableMemoryStream recyclable && recyclable.Length <= int.MaxValue)
-			return new DictionarySource(recyclable.GetReadOnlySequence());
+		{
+			// When the source was copied into pooled memory (a non-seekable source), its lifetime is tied to the
+			// reader: disposing the decoder disposes the reader, which returns the pooled blocks.
+			Action? release = null;
+			if (ReferenceEquals(source, this._sourceCopy))
+			{
+				release = this._sourceCopy!.Dispose;
+				this._sourceCopy = null; // ownership moved to the reader
+			}
+
+			return new ReadOnlySequenceSource(recyclable.GetReadOnlySequence(), release);
+		}
 
 		if (source is MemoryStream memory && memory.TryGetBuffer(out var buffer))
-			return new DictionarySource(new ReadOnlySequence<byte>(buffer.Array!, buffer.Offset, buffer.Count));
+			return new ReadOnlySequenceSource(new ReadOnlySequence<byte>(buffer.Array!, buffer.Offset, buffer.Count));
 
-		return new StreamDictionaryReader(source, this._options.BytePoolOrDefault);
+		return new StreamDictionaryReader(source, this._options.BytePoolOrDefault, this._options.MemoryStreamManagerOrDefault.GetStream());
 	}
 
 	private bool IsFinished(OperationStatus status, bool endOfDelta, out VcDiffResult result)

@@ -78,7 +78,7 @@ internal sealed class CustomCodeTableDecoder
 		{
 			using var decoder = new VcDiffDecoder(
 				new VcDecoderOptions { BytePool = this._bytePool },
-				new DictionarySource(new ReadOnlySequence<byte>(CodeTable.DefaultBytes)),
+				new ReadOnlySequenceSource(new ReadOnlySequence<byte>(CodeTable.DefaultBytes)),
 				false);
 
 			var output = serialized.AsSpan(0, CodeTable.SerializedSize + 1);

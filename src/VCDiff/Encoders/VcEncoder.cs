@@ -22,10 +22,6 @@ public class VcEncoder : IDisposable
 	private readonly EncoderSession _session;
 	private readonly Stream _targetData;
 
-	// Holds the dictionary read from a source stream, in pooled blocks rather than one large array.
-	// Stays null when the source stream's memory is used in place (see OpenSource).
-	private RecyclableMemoryStream? _sourceCopy;
-
     /// <summary>
     ///     Creates a new VCDIFF Encoder from a source stream. The input streams will not be
     ///     closed once this object is disposed.
@@ -51,17 +47,7 @@ public class VcEncoder : IDisposable
 		this._targetData = target;
 		this._outputStream = outputStream;
 
-		var dictionary = this.OpenSource(source);
-		try
-		{
-			this._session = new EncoderSession(dictionary, options);
-		}
-		catch
-		{
-			this._sourceCopy?.Dispose();
-			this._sourceCopy = null;
-			throw;
-		}
+		this._session = new EncoderSession(this.OpenSource(source), options);
 	}
 
     /// <summary>
@@ -86,7 +72,7 @@ public class VcEncoder : IDisposable
 	{
 	}
 
-	private DictionarySource OpenSource(Stream source)
+	private ReadOnlySequenceSource OpenSource(Stream source)
 	{
 		// The block hash needs random access to the whole dictionary, so it has to be kept in memory.
 		// Memory backed streams already are: reference their buffers instead of copying them.
@@ -95,11 +81,11 @@ public class VcEncoder : IDisposable
 			var start = recyclable.Position;
 			var length = recyclable.Length;
 			if (start >= length)
-				return new DictionarySource(ReadOnlySequence<byte>.Empty);
+				return new ReadOnlySequenceSource(ReadOnlySequence<byte>.Empty);
 
 			var sequence = recyclable.GetReadOnlySequence().Slice(start);
 			recyclable.Position = length; // consume the source as CopyTo would
-			return new DictionarySource(sequence);
+			return new ReadOnlySequenceSource(sequence);
 		}
 
 		// A writable MemoryStream may still be changed by the caller, so only a read-only one is referenced.
@@ -108,23 +94,22 @@ public class VcEncoder : IDisposable
 			var start = memory.Position;
 			var length = memory.Length;
 			if (start >= length)
-				return new DictionarySource(ReadOnlySequence<byte>.Empty);
+				return new ReadOnlySequenceSource(ReadOnlySequence<byte>.Empty);
 
 			var sequence = new ReadOnlySequence<byte>(segment.Array, segment.Offset + (int)start, (int)(length - start));
 			memory.Position = length; // consume the source as CopyTo would
-			return new DictionarySource(sequence);
+			return new ReadOnlySequenceSource(sequence);
 		}
 
-		this._sourceCopy = this._manager.GetStream(nameof(VcEncoder));
+		var sourceCopy = this._manager.GetStream(nameof(VcEncoder));
 		try
 		{
-			source.CopyTo(this._sourceCopy);
-			return new DictionarySource(this._sourceCopy.GetReadOnlySequence());
+			source.CopyTo(sourceCopy);
+			return new ReadOnlySequenceSource(sourceCopy.GetReadOnlySequence(), sourceCopy.Dispose);
 		}
 		catch
 		{
-			this._sourceCopy.Dispose();
-			this._sourceCopy = null;
+			sourceCopy.Dispose();
 			throw;
 		}
 	}
@@ -282,7 +267,5 @@ public class VcEncoder : IDisposable
     public void Dispose()
 	{
 		this._session.Dispose();
-		this._sourceCopy?.Dispose();
-		this._sourceCopy = null;
 	}
 }

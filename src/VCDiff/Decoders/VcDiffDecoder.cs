@@ -97,7 +97,7 @@ public sealed class VcDiffDecoder : IDisposable
 	}
 
     /// <summary>
-    ///     Creates a streaming VCDIFF decoder.
+    ///     Creates a streaming VCDIFF decoder over an in-memory dictionary.
     /// </summary>
     /// <param name="dictionary">
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
@@ -105,7 +105,20 @@ public sealed class VcDiffDecoder : IDisposable
     /// </param>
     /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
     public VcDiffDecoder(ReadOnlySequence<byte> dictionary, VcDecoderOptions? options = null)
-		: this(ValidateOptions(options), new DictionarySource(dictionary), true)
+		: this(new ReadOnlySequenceSource(dictionary), options)
+	{
+	}
+
+    /// <summary>
+    ///     Creates a streaming VCDIFF decoder.
+    /// </summary>
+    /// <param name="dictionary">
+    ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
+    ///     instance.
+    /// </param>
+    /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
+    public VcDiffDecoder(IDictionaryReader dictionary, VcDecoderOptions? options = null)
+		: this(ValidateOptions(options), dictionary, true)
 	{
 	}
 

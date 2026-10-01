@@ -329,19 +329,35 @@ public class SegmentedDictionaryTests
 	}
 
 	[Fact]
-	public void Encoder_DoesNotCopyDictionary()
+	public void Dictionary_IsReferencedInPlace_WithoutPinning()
 	{
 		var dict = MakeDictionary(100_000, 31);
-		var target = MakeTarget(dict, 50_000, 32);
 		var owner = new TrackingMemoryManager(dict);
 
-		using (var enc = new VcDiffEncoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(1, owner.Pins);
+		// The reader holds the sequence by reference and reads through GC-safe spans, so it neither copies
+		// nor pins the dictionary (pinning was only needed by the old raw-pointer implementation).
+		using (var enc = new VcDiffEncoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
 
 		Assert.Equal(0, owner.Pins);
 
-		using (var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(1, owner.Pins);
+		using (var dec = new VcDiffDecoder(new ReadOnlySequence<byte>(owner.Memory))) Assert.Equal(0, owner.Pins);
 
 		Assert.Equal(0, owner.Pins);
+	}
+
+	[Fact]
+	public void ReadOnlySequenceSource_ReleaseAction_IsInvokedOnceOnDispose()
+	{
+		var releases = 0;
+		var source = new ReadOnlySequenceSource(new ReadOnlySequence<byte>(new byte[16]), () => releases++);
+
+		Assert.Equal(0, releases);
+		source.Dispose();
+		Assert.Equal(1, releases);
+
+		// Dispose is idempotent: the release action runs exactly once.
+		source.Dispose();
+		Assert.Equal(1, releases);
 	}
 
 	[Fact]

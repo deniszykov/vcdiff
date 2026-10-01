@@ -20,8 +20,8 @@ namespace VCDiff.Encoders;
 ///         once the final window has been flushed after <c>isFinal</c> is set.
 ///     </para>
 ///     <para>
-///         The dictionary is not copied: its segments are pinned and read in place, so it may be made of
-///         many small buffers. The memory behind it must stay alive and unchanged until
+///         The dictionary is not copied: its segments are read in place through GC-safe spans, so it may be
+///         made of many small buffers. The memory behind it must stay alive and unchanged until
 ///         <see cref="Dispose" /> is called.
 ///     </para>
 /// </remarks>
@@ -43,7 +43,7 @@ public sealed class VcDiffEncoder : IDisposable
 	private byte[]? _targetWindow;
 
     /// <summary>
-    ///     Creates a streaming VCDIFF encoder.
+    ///     Creates a streaming VCDIFF encoder over an in-memory dictionary.
     /// </summary>
     /// <param name="dictionary">
     ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
@@ -51,6 +51,19 @@ public sealed class VcDiffEncoder : IDisposable
     /// </param>
     /// <param name="options">The encoder options. See <see cref="VcEncoderOptions" />.</param>
     public VcDiffEncoder(ReadOnlySequence<byte> dictionary, VcEncoderOptions? options = null)
+		: this(new ReadOnlySequenceSource(dictionary), options)
+	{
+	}
+
+    /// <summary>
+    ///     Creates a streaming VCDIFF encoder.
+    /// </summary>
+    /// <param name="dictionary">
+    ///     The dictionary (source/base) data. It is referenced, not copied, and must outlive this
+    ///     instance.
+    /// </param>
+    /// <param name="options">The encoder options. See <see cref="VcEncoderOptions" />.</param>
+    public VcDiffEncoder(IDictionaryReader dictionary, VcEncoderOptions? options = null)
 	{
 		options ??= new VcEncoderOptions();
 		this._pool = options.BytePoolOrDefault;
@@ -59,7 +72,7 @@ public sealed class VcDiffEncoder : IDisposable
 		var checksumFormat = options.ChecksumFormat;
 		EncoderSession.ValidateFormat(interleaved, checksumFormat);
 
-		this._session = new EncoderSession(new DictionarySource(dictionary), options);
+		this._session = new EncoderSession(dictionary, options);
 		try
 		{
 			this._windowSize = this._session.WindowSize;

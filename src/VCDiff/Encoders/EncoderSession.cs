@@ -21,7 +21,7 @@ internal sealed class EncoderSession : IDisposable
 	private const int MAX_BUFFER_SIZE_MIB = int.MaxValue / MEBIBYTE;
 
 	private readonly int _blockSize;
-	private readonly DictionarySource _dictionary;
+	private readonly IDictionaryReader dictionaryReader;
 	private readonly RollingHash _hasher;
 	private readonly RecyclableMemoryStreamManager _manager;
 	private readonly int _minMatchSize;
@@ -39,16 +39,16 @@ internal sealed class EncoderSession : IDisposable
 	/// <summary>
 	///     The length of the dictionary in bytes.
 	/// </summary>
-	public long DictionaryLength => this._dictionary.Length;
+	public long DictionaryLength => this.dictionaryReader.Length;
 
 	/// <summary>
-	///     Validates <paramref name="options" /> and creates a session over <paramref name="dictionary" />.
+	///     Validates <paramref name="options" /> and creates a session over <paramref name="dictionaryReader" />.
 	/// </summary>
-	/// <param name="dictionary">The dictionary. Ownership is taken, it is disposed even when this constructor throws.</param>
+	/// <param name="dictionaryReader">The dictionary. Ownership is taken, it is disposed even when this constructor throws.</param>
 	/// <param name="options">The encoder options.</param>
-	public EncoderSession(DictionarySource dictionary, VcEncoderOptions options)
+	public EncoderSession(IDictionaryReader dictionaryReader, VcEncoderOptions options)
 	{
-		this._dictionary = dictionary;
+		this.dictionaryReader = dictionaryReader;
 		try
 		{
 			var maxBufferSize = options.MaxBufferSize;
@@ -80,7 +80,7 @@ internal sealed class EncoderSession : IDisposable
 		}
 		catch
 		{
-			dictionary.Dispose();
+			dictionaryReader.Dispose();
 			throw;
 		}
 	}
@@ -113,7 +113,7 @@ internal sealed class EncoderSession : IDisposable
 
 		if (this._blockHash == null)
 		{
-			var blockHash = new BlockHash(this._dictionary, this._hasher, this._blockSize);
+			var blockHash = new BlockHash(this.dictionaryReader, this._hasher, this._blockSize);
 			try
 			{
 				blockHash.AddAllBlocks();
@@ -127,7 +127,7 @@ internal sealed class EncoderSession : IDisposable
 			this._blockHash = blockHash;
 		}
 
-		return new ChunkEncoder(this._blockHash, this._dictionary.Length, this._hasher, checksumFormat, interleaved, this._minMatchSize, this._manager);
+		return new ChunkEncoder(this._blockHash, this.dictionaryReader.Length, this._hasher, checksumFormat, interleaved, this._minMatchSize, this._manager);
 	}
 
 	public void Dispose()
@@ -138,7 +138,7 @@ internal sealed class EncoderSession : IDisposable
 		this._disposed = true;
 		this._blockHash?.Dispose();
 		this._blockHash = null;
-		this._dictionary.Dispose();
+		this.dictionaryReader.Dispose();
 		if (this._ownsHasher)
 			this._hasher.Dispose();
 	}
