@@ -36,24 +36,22 @@ public sealed class VcDiffDecoder : IDisposable
 		Error
 	}
 
-	private const byte DEFAULT_NEAR_SIZE = 4;
-	private const byte DEFAULT_SAME_SIZE = 3;
-	private const byte FIRST_NEAR = (byte)VcDiffModes.FIRST;
-
 	// How much unparsed delta is kept between calls before more is taken from the caller.
 	private const int INPUT_BUFFER_SIZE = 16 * 1024;
 
-	private readonly DictionarySource _dictionary;
+	private readonly bool _allowCustomCodeTable;
+	private readonly IDictionaryReader _dictionary;
 	private readonly bool _disableChecksums;
-	private readonly StreamingByteBuffer _input;
+	private readonly DeltaInputBuffer _input;
 	private readonly int _maxTargetWindowSize;
 	private readonly ArrayPool<byte> _pool;
+	private AddressCache _addressCache = new();
 	private bool _addressesCompressed;
-	private PinnedArrayRental _addressesData;
+	private PooledArray _addressesData;
 	private long _addressForCopyLength;
 	private int _addrPos;
 	private bool _addRunCompressed;
-	private PinnedArrayRental _addRunData;
+	private PooledArray _addRunData;
 	private long _addRunLength;
 	private int _addRunPos;
 	private uint _checksum;
@@ -62,48 +60,30 @@ public sealed class VcDiffDecoder : IDisposable
 
 	private bool _disposed;
 	private bool _hasPendingInstruction;
-
-	// File header state.
 	private bool _headerParsed;
 	private int _instrPos;
 	private long _instructionAndSizesLength;
 	private bool _instructionsCompressed;
-	private PinnedArrayRental _instructionsData;
+	private PooledArray _instructionsData;
 	private long _interleavedRemaining;
 	private bool _interleavedWindow;
-	private bool isSdch;
-	private long[] _nearCache = new long[DEFAULT_NEAR_SIZE];
-
-	// Address cache state (per window).
-	private byte _nearSize = DEFAULT_NEAR_SIZE;
-	private int _nextSlot;
+	private bool _isSdch;
 	private byte _pendingInstructionMode;
 	private int _pendingInstructionSize;
 	private VcDiffInstructionType _pendingInstructionType;
-
-	// Instruction decode state.
 	private int _pendingSecondOpcode = CodeTable.KNoOpcode;
 	private uint _runningChecksum;
-	private long[] _sameCache = new long[DEFAULT_SAME_SIZE * 256];
-	private byte _sameSize = DEFAULT_SAME_SIZE;
-	private XzCompressor? _secondaryCompressor;
-	private byte _secondaryCompressorId;
+	private XzSectionDecompressor? _secondaryCompressor;
 	private int _sectionFilled;
 	private int _sectionIndex;
-
-	// Window body state.
 	private bool _sectionsBuffered;
-	private PinnedArrayRental _sectionWire;
+	private PooledArray _sectionWire;
 	private long _sourceSegmentLength;
 	private long _sourceSegmentOffset;
 	private int _targetDecoded;
 	private int _targetEmitted;
-
-	// Target output state.
 	private byte[]? _targetWindow;
 	private int _targetWindowLength;
-
-	// Window header state.
 	private bool _windowHeaderParsed;
 
 	// The unread part of the interleaved window body that has arrived so far.
@@ -116,12 +96,6 @@ public sealed class VcDiffDecoder : IDisposable
 		}
 	}
 
-	// ------------------------------------------------------------------ address cache
-
-	private byte FirstSame => (byte)(VcDiffModes.FIRST + this._nearSize);
-
-	private byte Last => (byte)(this.FirstSame + this._sameSize - 1);
-
     /// <summary>
     ///     Creates a streaming VCDIFF decoder.
     /// </summary>
@@ -131,18 +105,56 @@ public sealed class VcDiffDecoder : IDisposable
     /// </param>
     /// <param name="options">The decoder options. See <see cref="VcDecoderOptions" />.</param>
     public VcDiffDecoder(ReadOnlySequence<byte> dictionary, VcDecoderOptions? options = null)
+		: this(ValidateOptions(options), new DictionarySource(dictionary), true)
 	{
-		options ??= new VcDecoderOptions();
+	}
 
+    /// <summary>
+    ///     Creates a decoder over any dictionary reader. The decoder takes ownership of
+    ///     <paramref name="dictionary" /> and disposes it.
+    /// </summary>
+    /// <param name="options">Validated decoder options.</param>
+    /// <param name="dictionary">The dictionary reader.</param>
+    /// <param name="allowCustomCodeTable">
+    ///     Whether the delta may carry a custom code table. A custom code table is itself decoded with a nested decoder
+    ///     that must not accept another one (RFC 3284 section 7), which also bounds the nesting depth.
+    /// </param>
+    internal VcDiffDecoder(VcDecoderOptions options, IDictionaryReader dictionary, bool allowCustomCodeTable)
+	{
 		this._pool = options.BytePoolOrDefault;
 		this._maxTargetWindowSize = options.MaxTargetFileSize;
 		this._disableChecksums = options.DisableChecksums;
+		this._allowCustomCodeTable = allowCustomCodeTable;
+		this._dictionary = dictionary;
+		this._input = new DeltaInputBuffer(8192, this._pool);
+	}
 
-		if (this._maxTargetWindowSize <= 0)
+    /// <summary>
+    ///     Why the last <see cref="Decode" /> call returned <see cref="OperationStatus.InvalidData" />.
+    /// </summary>
+    internal DecodeFailure Failure { get; private set; }
+
+    /// <summary>
+    ///     Whether the delta header declared the SDCH (version 'S') format. Valid once the header has been parsed.
+    /// </summary>
+    internal bool IsSdchFormat => this._isSdch;
+
+	private static VcDecoderOptions ValidateOptions(VcDecoderOptions? options)
+	{
+		options ??= new VcDecoderOptions();
+		if (options.MaxTargetFileSize <= 0)
 			throw new ArgumentOutOfRangeException(nameof(options), "MaxTargetFileSize must be positive.");
 
-		this._dictionary = new DictionarySource(dictionary);
-		this._input = new StreamingByteBuffer(8192, this._pool);
+		return options;
+	}
+
+	private OperationStatus MoreOrTruncated(bool isFinal)
+	{
+		if (!isFinal)
+			return OperationStatus.NeedMoreData;
+
+		this.Failure = DecodeFailure.Truncated;
+		return OperationStatus.InvalidData;
 	}
 
     /// <summary>
@@ -165,9 +177,19 @@ public sealed class VcDiffDecoder : IDisposable
 		var stalled = false;
 		while (true)
 		{
+			// While a window's sections are being filled and nothing is buffered, copy section bytes
+			// straight from the caller's input instead of staging them in the input buffer first.
+			if (this.IsBufferingSections && this._input.Available == 0 && inputConsumed < input.Length)
+			{
+				var bs = this.BufferSections(input.Slice(inputConsumed), out var used);
+				inputConsumed += used;
+				if (bs == ParseStatus.Error)
+					return this.Finish(OperationStatus.InvalidData);
+			}
+
 			// Take only as much input as fits the internal buffer, unless the decoder could
 			// not make progress with a full one (e.g. a large application header).
-			var room = INPUT_BUFFER_SIZE - (int)this._input.Available;
+			var room = INPUT_BUFFER_SIZE - this._input.Available;
 			if (room <= 0 && stalled)
 				room = INPUT_BUFFER_SIZE;
 
@@ -184,10 +206,18 @@ public sealed class VcDiffDecoder : IDisposable
 			this._input.Compact();
 
 			if (status != OperationStatus.NeedMoreData || inputConsumed == input.Length)
-				return status;
+				return this.Finish(status);
 
 			stalled = this._input.Available >= INPUT_BUFFER_SIZE;
 		}
+	}
+
+	private OperationStatus Finish(OperationStatus status)
+	{
+		if (status == OperationStatus.InvalidData && this.Failure == DecodeFailure.None)
+			this.Failure = DecodeFailure.Malformed;
+
+		return status;
 	}
 
 	private OperationStatus DecodeCore(Span<byte> output, out int outputWritten, bool isFinal)
@@ -200,7 +230,7 @@ public sealed class VcDiffDecoder : IDisposable
 			{
 				var hs = this.ParseHeader();
 				if (hs == ParseStatus.NeedMore)
-					return isFinal ? OperationStatus.InvalidData : OperationStatus.NeedMoreData;
+					return this.MoreOrTruncated(isFinal);
 				if (hs == ParseStatus.Error)
 					return OperationStatus.InvalidData;
 			}
@@ -219,17 +249,18 @@ public sealed class VcDiffDecoder : IDisposable
 
 				var hs = this.ParseWindowHeader();
 				if (hs == ParseStatus.NeedMore)
-					return isFinal ? OperationStatus.InvalidData : OperationStatus.NeedMoreData;
+					return this.MoreOrTruncated(isFinal);
 				if (hs == ParseStatus.Error)
 					return OperationStatus.InvalidData;
 			}
 
 			// Buffer the full delta window for non-interleaved format.
-			if (!this._interleavedWindow && !this._sectionsBuffered)
+			if (this.IsBufferingSections)
 			{
-				var bs = this.BufferSections();
+				var bs = this.BufferSections(this._input.Remaining, out var used);
+				this._input.Skip(used);
 				if (bs == ParseStatus.NeedMore)
-					return isFinal ? OperationStatus.InvalidData : OperationStatus.NeedMoreData;
+					return this.MoreOrTruncated(isFinal);
 				if (bs == ParseStatus.Error)
 					return OperationStatus.InvalidData;
 			}
@@ -246,15 +277,37 @@ public sealed class VcDiffDecoder : IDisposable
 				continue;
 			}
 
+			// A buffered (non-interleaved) window never stops half way for more input, so when the
+			// whole of it fits it is decoded straight into the output, without staging it.
+			if (!this._interleavedWindow && this._targetDecoded == 0 && output.Length - outputWritten >= this._targetWindowLength)
+			{
+				var window = output.Slice(outputWritten, this._targetWindowLength);
+				var decodedOk = true;
+				while (decodedOk && this._targetDecoded < this._targetWindowLength)
+				{
+					decodedOk = this.DecodeNonInterleavedInstruction(window);
+				}
+
+				// Count the bytes as emitted, exactly as the staged path would have.
+				outputWritten += this._targetDecoded;
+				this._targetEmitted = this._targetDecoded;
+				if (!decodedOk)
+					return OperationStatus.InvalidData;
+
+				continue;
+			}
+
 			// Decode a single instruction.
+			var targetWindow = this.EnsureTargetWindow();
+			var needMore = false;
 			var ok = this._interleavedWindow
-				? this.DecodeInterleavedInstruction(out var needMore)
-				: this.DecodeNonInterleavedInstruction(out needMore);
+				? this.DecodeInterleavedInstruction(targetWindow, out needMore)
+				: this.DecodeNonInterleavedInstruction(targetWindow);
 
 			if (!ok)
 			{
 				if (needMore)
-					return isFinal ? OperationStatus.InvalidData : OperationStatus.NeedMoreData;
+					return this.MoreOrTruncated(isFinal);
 
 				return OperationStatus.InvalidData;
 			}
@@ -266,44 +319,42 @@ public sealed class VcDiffDecoder : IDisposable
 	private ParseStatus ParseHeader()
 	{
 		var data = this._input.Remaining;
-		var i = 0;
-
-		if (data.Length < 5)
+		if (data.Length < FileHeader.LENGTH)
 			return ParseStatus.NeedMore;
 
-		byte v = data[0], c = data[1], d = data[2], version = data[3], hdr = data[4];
-		if (v != 0xD6 || c != 0xC3 || d != 0xC4)
+		byte version = data[3], hdr = data[4];
+		if (!data.Slice(0, FileHeader.Magic.Length).SequenceEqual(FileHeader.Magic))
 			return ParseStatus.Error;
-		if (version != 0x00 && version != (byte)'S')
+		if (version != FileHeader.VERSION_RFC3284 && version != FileHeader.VERSION_SDCH)
 			return ParseStatus.Error;
 
-		i = 5;
+		var i = FileHeader.LENGTH;
 
 		byte secondaryId = 0;
 		if ((hdr & (int)VcDiffCodeFlags.VCDDECOMPRESS) != 0)
 		{
-			if (data.Length < 6)
+			if (data.Length <= i)
 				return ParseStatus.NeedMore;
 
-			secondaryId = data[5];
-			i = 6;
+			secondaryId = data[i++];
 		}
 
 		CustomCodeTableDecoder? customTable = null;
 		if ((hdr & (int)VcDiffCodeFlags.VCDCODETABLE) != 0)
 		{
+			if (!this._allowCustomCodeTable)
+				return ParseStatus.Error;
+
 			var len = VarIntBe.ParseInt32(data.Slice(i), out var lenBytes);
 			if (len == (int)VcDiffResult.EOD)
 				return ParseStatus.NeedMore;
 			if (len == (int)VcDiffResult.ERROR || len <= 0)
 				return ParseStatus.Error;
-			if (i + lenBytes + len > data.Length)
+			if (len > data.Length - i - lenBytes)
 				return ParseStatus.NeedMore;
 
-			var ctBytes = data.Slice(i, lenBytes + len).ToArray();
-			using var ctb = new ByteBuffer(ctBytes);
-			var ctd = new CustomCodeTableDecoder();
-			if (ctd.Decode(ctb) != VcDiffResult.SUCCESS)
+			var ctd = new CustomCodeTableDecoder(this._pool);
+			if (ctd.Decode(this._input.GetReadOnlySequence(i, lenBytes + len)) != VcDiffResult.SUCCESS)
 				return ParseStatus.Error;
 
 			customTable = ctd;
@@ -317,27 +368,27 @@ public sealed class VcDiffDecoder : IDisposable
 				return st;
 			if (appLen < 0)
 				return ParseStatus.Error;
-			if (i + appLen > data.Length)
+			if (appLen > data.Length - i)
 				return ParseStatus.NeedMore;
 
 			i += appLen;
 		}
 
+		// xdelta3 defines 1 as "DJW static huffman" and 16 as "FGK adaptive huffman"; only 2 (LZMA) is supported.
 		if (secondaryId != 0 && secondaryId != 2)
+		{
+			this.Failure = DecodeFailure.UnsupportedSecondaryCompressor;
 			return ParseStatus.Error;
+		}
 
 		this._input.Skip(i);
 		this._headerParsed = true;
-		this.isSdch = version == (byte)'S';
-		this._secondaryCompressorId = secondaryId;
+		this._isSdch = version == FileHeader.VERSION_SDCH;
 		this._customTable = customTable;
-		this._nearSize = customTable?.NearSize ?? DEFAULT_NEAR_SIZE;
-		this._sameSize = customTable?.SameSize ?? DEFAULT_SAME_SIZE;
-		this._nearCache = new long[this._nearSize];
-		this._sameCache = new long[this._sameSize * 256];
-		this._nextSlot = 0;
+		if (customTable != null)
+			this._addressCache = new AddressCache(customTable.NearSize, customTable.SameSize);
 
-		if (secondaryId == 2) this._secondaryCompressor ??= new XzCompressor(this._pool);
+		if (secondaryId == 2) this._secondaryCompressor ??= new XzSectionDecompressor(this._pool);
 
 		return ParseStatus.Ok;
 	}
@@ -391,8 +442,13 @@ public sealed class VcDiffDecoder : IDisposable
 
 		var st4 = ReadVarInt(data, ref i, out var targetLength);
 		if (st4 != ParseStatus.Ok) return st4;
-		if (targetLength < 0 || targetLength > this._maxTargetWindowSize)
+		if (targetLength < 0)
 			return ParseStatus.Error;
+		if (targetLength > this._maxTargetWindowSize)
+		{
+			this.Failure = DecodeFailure.TargetWindowTooLarge;
+			return ParseStatus.Error;
+		}
 
 		if (i >= data.Length)
 			return ParseStatus.NeedMore;
@@ -418,8 +474,8 @@ public sealed class VcDiffDecoder : IDisposable
 		var cf = ChecksumFormat.None;
 		if ((winIndicator & (int)VcDiffWindowFlags.VCDCHECKSUM) != 0)
 		{
-			cf = this.isSdch ? ChecksumFormat.SDCH : ChecksumFormat.Xdelta3;
-			if (this.isSdch)
+			cf = this._isSdch ? ChecksumFormat.SDCH : ChecksumFormat.Xdelta3;
+			if (this._isSdch)
 			{
 				var parsed = VarIntBe.ParseInt64(data.Slice(i), out var vb);
 				if (parsed == (long)VcDiffResult.EOD)
@@ -446,9 +502,9 @@ public sealed class VcDiffDecoder : IDisposable
 			return ParseStatus.Error;
 
 		bool interleaved;
-		if (this.isSdch && addRunLength == 0 && addrLength == 0 && instrLength > 0)
+		if (this._isSdch && addRunLength == 0 && addrLength == 0 && instrLength > 0)
 			interleaved = true;
-		else if (!this.isSdch || (this.isSdch && (addRunLength > 0 || addrLength > 0) && instrLength > 0))
+		else if (!this._isSdch || (this._isSdch && (addRunLength > 0 || addrLength > 0) && instrLength > 0))
 			interleaved = false;
 		else
 			return ParseStatus.Error;
@@ -488,14 +544,30 @@ public sealed class VcDiffDecoder : IDisposable
 		return ParseStatus.Ok;
 	}
 
-	private void SetupWindow()
+	private bool IsBufferingSections => this._headerParsed && this._windowHeaderParsed && !this._interleavedWindow && !this._sectionsBuffered;
+
+	// The staging buffer for the current target window. It is rented only when a window can not be
+	// decoded straight into the output, and its size is bounded by MaxTargetFileSize (validated in the
+	// window header).
+	private byte[] EnsureTargetWindow()
 	{
 		if (this._targetWindow == null || this._targetWindow.Length < this._targetWindowLength)
 		{
-			if (this._targetWindow != null) this._pool.Return(this._targetWindow, false);
+			if (this._targetWindow != null)
+			{
+				var old = this._targetWindow;
+				this._targetWindow = null;
+				this._pool.Return(old, false);
+			}
+
 			this._targetWindow = this._pool.Rent(Math.Max(1, this._targetWindowLength));
 		}
 
+		return this._targetWindow;
+	}
+
+	private void SetupWindow()
+	{
 		this._targetDecoded = 0;
 		this._targetEmitted = 0;
 		this._runningChecksum = this._checksumFormat == ChecksumFormat.Xdelta3 ? 1u : 0u;
@@ -509,9 +581,7 @@ public sealed class VcDiffDecoder : IDisposable
 		this._pendingInstructionMode = 0;
 		this._sectionsBuffered = false;
 
-		Array.Clear(this._nearCache, 0, this._nearCache.Length);
-		Array.Clear(this._sameCache, 0, this._sameCache.Length);
-		this._nextSlot = 0;
+		this._addressCache.Reset();
 
 		this.ReleaseSections();
 	}
@@ -559,9 +629,10 @@ public sealed class VcDiffDecoder : IDisposable
 
 	// ------------------------------------------------------------------ sections
 
-	private ParseStatus BufferSections()
+	private ParseStatus BufferSections(ReadOnlySpan<byte> source, out int consumed)
 	{
 		// Sections are filled as the delta arrives, so the input buffer never has to hold a whole window.
+		consumed = 0;
 		while (this._sectionIndex < 3)
 		{
 			int length;
@@ -588,15 +659,15 @@ public sealed class VcDiffDecoder : IDisposable
 
 			if (this._sectionWire.Data == null)
 			{
-				this._sectionWire = new PinnedArrayRental(length, this._pool);
+				this._sectionWire = new PooledArray(length, this._pool);
 				this._sectionFilled = 0;
 			}
 
-			var take = (int)Math.Min(length - this._sectionFilled, this._input.Available);
+			var take = Math.Min(length - this._sectionFilled, source.Length - consumed);
 			if (take > 0)
 			{
-				this._input.Remaining.Slice(0, take).CopyTo(this._sectionWire.AsSpan().Slice(this._sectionFilled));
-				this._input.Skip(take);
+				source.Slice(consumed, take).CopyTo(this._sectionWire.AsSpan().Slice(this._sectionFilled));
+				consumed += take;
 				this._sectionFilled += take;
 			}
 
@@ -625,7 +696,7 @@ public sealed class VcDiffDecoder : IDisposable
 		return ParseStatus.Ok;
 	}
 
-	private bool TryDecompressSection(WindowSectionType sectionType, ref PinnedArrayRental data)
+	private bool TryDecompressSection(WindowSectionType sectionType, ref PooledArray data)
 	{
 		var wire = data;
 		data = default;
@@ -635,11 +706,7 @@ public sealed class VcDiffDecoder : IDisposable
 			if (this._secondaryCompressor == null)
 				return false;
 
-			var uncompressedLength = VarIntBe.ParseInt32(wire.AsSpan(), out _);
-			if (uncompressedLength < 0 || uncompressedLength > this._maxTargetWindowSize)
-				return false;
-
-			data = this._secondaryCompressor.Decompress(sectionType, wire);
+			data = this._secondaryCompressor.Decompress(sectionType, new ReadOnlySequence<byte>(wire.Data!, 0, wire.Length), this._maxTargetWindowSize);
 			return true;
 		}
 		catch
@@ -654,13 +721,11 @@ public sealed class VcDiffDecoder : IDisposable
 
 	// ------------------------------------------------------------------ body decode
 
-	private bool DecodeNonInterleavedInstruction(out bool needMore)
+	private bool DecodeNonInterleavedInstruction(Span<byte> window)
 	{
-		needMore = false;
-
-		var instrSpan = this._instructionsData.AsSpanOrDefault();
-		var addRunSpan = this._addRunData.AsSpanOrDefault();
-		var addrSpan = this._addressesData.AsSpanOrDefault();
+		var instrSpan = this._instructionsData.AsSpan();
+		var addRunSpan = this._addRunData.AsSpan();
+		var addrSpan = this._addressesData.AsSpan();
 
 		var r = this.TryDecodeInstruction(instrSpan.Slice(this._instrPos), out var used, out var type, out var size, out var mode);
 		if (r != VcDiffResult.SUCCESS)
@@ -678,7 +743,7 @@ public sealed class VcDiffDecoder : IDisposable
 				if (this._addRunPos + size > addRunSpan.Length)
 					return false;
 
-				this.WriteTarget(addRunSpan.Slice(this._addRunPos, size));
+				this.WriteTarget(window, addRunSpan.Slice(this._addRunPos, size));
 				this._addRunPos += size;
 				return true;
 
@@ -686,17 +751,17 @@ public sealed class VcDiffDecoder : IDisposable
 				if (this._addRunPos + 1 > addRunSpan.Length)
 					return false;
 
-				this.WriteRunTarget(addRunSpan[this._addRunPos], size);
+				this.WriteRunTarget(window, addRunSpan[this._addRunPos], size);
 				this._addRunPos += 1;
 				return true;
 
 			case VcDiffInstructionType.COPY:
 				var here = this._sourceSegmentLength + this._targetDecoded;
-				var decoded = this.DecodeAddress(here, mode, addrSpan, ref this._addrPos, out var status);
+				var decoded = this._addressCache.DecodeAddress(here, mode, addrSpan, ref this._addrPos, out var status);
 				if (status != VcDiffResult.SUCCESS)
 					return false;
 
-				return this.CopyTarget(decoded, size);
+				return this.CopyTarget(window, decoded, size);
 
 			default:
 				return false;
@@ -709,7 +774,7 @@ public sealed class VcDiffDecoder : IDisposable
 		this._interleavedRemaining -= count;
 	}
 
-	private bool DecodeInterleavedInstruction(out bool needMore)
+	private bool DecodeInterleavedInstruction(Span<byte> window, out bool needMore)
 	{
 		needMore = false;
 
@@ -754,7 +819,7 @@ public sealed class VcDiffDecoder : IDisposable
 				var take = Math.Min(size, data.Length);
 				if (take > 0)
 				{
-					this.WriteTarget(data.Slice(0, take));
+					this.WriteTarget(window, data.Slice(0, take));
 					this.SkipInterleaved(take);
 					size -= take;
 				}
@@ -777,7 +842,7 @@ public sealed class VcDiffDecoder : IDisposable
 					return false;
 				}
 
-				this.WriteRunTarget(data[0], size);
+				this.WriteRunTarget(window, data[0], size);
 				this.SkipInterleaved(1);
 				this.ClearPending();
 				return true;
@@ -785,7 +850,7 @@ public sealed class VcDiffDecoder : IDisposable
 			case VcDiffInstructionType.COPY:
 				var here = this._sourceSegmentLength + this._targetDecoded;
 				var addrIndex = 0;
-				var decoded = this.DecodeAddress(here, mode, data, ref addrIndex, out var status);
+				var decoded = this._addressCache.DecodeAddress(here, mode, data, ref addrIndex, out var status);
 				if (status == VcDiffResult.EOD)
 				{
 					this.SavePending(type, size, mode);
@@ -798,7 +863,7 @@ public sealed class VcDiffDecoder : IDisposable
 
 				this.SkipInterleaved(addrIndex);
 				this.ClearPending();
-				return this.CopyTarget(decoded, size);
+				return this.CopyTarget(window, decoded, size);
 
 			default:
 				return false;
@@ -813,12 +878,12 @@ public sealed class VcDiffDecoder : IDisposable
 		mode = 0;
 
 		var table = this._customTable?.CustomTable ?? CodeTable.DefaultTable;
-		var inst1 = table.Inst1.AsSpan();
-		var inst2 = table.Inst2.AsSpan();
-		var size1 = table.Size1.AsSpan();
-		var size2 = table.Size2.AsSpan();
-		var mode1 = table.Mode1.AsSpan();
-		var mode2 = table.Mode2.AsSpan();
+		var inst1 = table.Inst1;
+		var inst2 = table.Inst2;
+		var size1 = table.Size1;
+		var size2 = table.Size2;
+		var mode1 = table.Mode1;
+		var mode2 = table.Mode2;
 
 		var pending = this._pendingSecondOpcode;
 		var index = 0;
@@ -875,69 +940,7 @@ public sealed class VcDiffDecoder : IDisposable
 		return VcDiffResult.SUCCESS;
 	}
 
-	private long DecodeAddress(long here, byte mode, ReadOnlySpan<byte> data, ref int index, out VcDiffResult status)
-	{
-		status = VcDiffResult.SUCCESS;
-		if (here < 0)
-		{
-			status = VcDiffResult.ERROR;
-			return 0;
-		}
-
-		long decoded;
-		if (this.IsSameMode(mode))
-		{
-			if (index >= data.Length)
-			{
-				status = VcDiffResult.EOD;
-				return 0;
-			}
-
-			var encoded = data[index++];
-			decoded = this.SameAddress((mode - this.FirstSame) * 256 + encoded);
-		}
-		else
-		{
-			var parsed = VarIntBe.ParseInt32(data.Slice(index), out var vb);
-			if (parsed == (int)VcDiffResult.ERROR)
-			{
-				status = VcDiffResult.ERROR;
-				return 0;
-			}
-
-			if (parsed == (int)VcDiffResult.EOD)
-			{
-				status = VcDiffResult.EOD;
-				return 0;
-			}
-
-			index += vb;
-			long encoded = parsed;
-
-			if (IsSelfMode(mode))
-				decoded = encoded;
-			else if (IsHereMode(mode))
-				decoded = here - encoded;
-			else if (this.IsNearMode(mode))
-				decoded = this.NearAddress(mode - FIRST_NEAR) + encoded;
-			else
-			{
-				status = VcDiffResult.ERROR;
-				return 0;
-			}
-		}
-
-		if (decoded < 0 || decoded >= here)
-		{
-			status = VcDiffResult.ERROR;
-			return 0;
-		}
-
-		this.UpdateCache(decoded);
-		return decoded;
-	}
-
-	private bool CopyTarget(long decodedAddress, int size)
+	private bool CopyTarget(Span<byte> window, long decodedAddress, int size)
 	{
 		var hereAddress = this._sourceSegmentLength + this._targetDecoded;
 		if (decodedAddress < 0 || decodedAddress > hereAddress)
@@ -945,14 +948,14 @@ public sealed class VcDiffDecoder : IDisposable
 
 		if (decodedAddress + size <= this._sourceSegmentLength)
 		{
-			this.WriteDictionaryTarget(decodedAddress + this._sourceSegmentOffset, size);
+			this.WriteDictionaryTarget(window, decodedAddress + this._sourceSegmentOffset, size);
 			return true;
 		}
 
 		if (decodedAddress < this._sourceSegmentLength)
 		{
 			var partial = (int)(this._sourceSegmentLength - decodedAddress);
-			this.WriteDictionaryTarget(decodedAddress + this._sourceSegmentOffset, partial);
+			this.WriteDictionaryTarget(window, decodedAddress + this._sourceSegmentOffset, partial);
 			size -= partial;
 			decodedAddress = this._sourceSegmentLength;
 		}
@@ -969,35 +972,35 @@ public sealed class VcDiffDecoder : IDisposable
 			for (var i = 0; i < size; i += availableData)
 			{
 				var toCopy = Math.Min(size - i, availableData);
-				this.WriteTarget(this._targetWindow.AsSpan((int)decodedAddress + i, toCopy));
+				this.WriteTarget(window, window.Slice((int)decodedAddress + i, toCopy));
 			}
 		}
 		else
-			this.WriteTarget(this._targetWindow.AsSpan((int)decodedAddress, size));
+			this.WriteTarget(window, window.Slice((int)decodedAddress, size));
 
 		return true;
 	}
 
-	private void WriteTarget(ReadOnlySpan<byte> data)
+	private void WriteTarget(Span<byte> window, ReadOnlySpan<byte> data)
 	{
-		data.CopyTo(this._targetWindow.AsSpan(this._targetDecoded));
+		data.CopyTo(window.Slice(this._targetDecoded));
 		this._targetDecoded += data.Length;
 
 		if (this._checksumFormat != ChecksumFormat.None && data.Length > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, data);
 	}
 
-	private void WriteDictionaryTarget(long dictionaryOffset, int size)
+	private void WriteDictionaryTarget(Span<byte> window, long dictionaryOffset, int size)
 	{
-		var span = this._targetWindow.AsSpan(this._targetDecoded, size);
+		var span = window.Slice(this._targetDecoded, size);
 		this._dictionary.CopyTo(dictionaryOffset, span);
 		this._targetDecoded += size;
 
 		if (this._checksumFormat != ChecksumFormat.None && size > 0) this._runningChecksum = Adler32.Hash(this._runningChecksum, span);
 	}
 
-	private void WriteRunTarget(byte value, int size)
+	private void WriteRunTarget(Span<byte> window, byte value, int size)
 	{
-		var span = this._targetWindow.AsSpan(this._targetDecoded, size);
+		var span = window.Slice(this._targetDecoded, size);
 		span.Fill(value);
 		this._targetDecoded += size;
 
@@ -1010,7 +1013,7 @@ public sealed class VcDiffDecoder : IDisposable
 		var toCopy = Math.Min(available, output.Length);
 		if (toCopy > 0)
 		{
-			this._targetWindow.AsSpan(this._targetEmitted, toCopy).CopyTo(output);
+			this._targetWindow!.AsSpan(this._targetEmitted, toCopy).CopyTo(output);
 			this._targetEmitted += toCopy;
 		}
 
@@ -1030,47 +1033,6 @@ public sealed class VcDiffDecoder : IDisposable
 		this._hasPendingInstruction = false;
 	}
 
-	private static bool IsSelfMode(byte mode)
-	{
-		return mode == (byte)VcDiffModes.SELF;
-	}
-
-	private static bool IsHereMode(byte mode)
-	{
-		return mode == (byte)VcDiffModes.HERE;
-	}
-
-	private bool IsNearMode(byte mode)
-	{
-		return mode >= FIRST_NEAR && mode < this.FirstSame;
-	}
-
-	private bool IsSameMode(byte mode)
-	{
-		return mode >= this.FirstSame && mode <= this.Last;
-	}
-
-	private long NearAddress(int pos)
-	{
-		return this._nearCache[pos];
-	}
-
-	private long SameAddress(int pos)
-	{
-		return this._sameCache[pos];
-	}
-
-	private void UpdateCache(long address)
-	{
-		if (this._nearSize > 0)
-		{
-			this._nearCache[this._nextSlot] = address;
-			this._nextSlot = (this._nextSlot + 1) % this._nearSize;
-		}
-
-		if (this._sameSize > 0) this._sameCache[(int)(address % (this._sameSize * 256))] = address;
-	}
-
 	/// <inheritdoc />
 	public void Dispose()
 	{
@@ -1082,6 +1044,30 @@ public sealed class VcDiffDecoder : IDisposable
 		this._secondaryCompressor?.Dispose();
 		this._dictionary.Dispose();
 		this._input.Dispose();
-		if (this._targetWindow != null) this._pool.Return(this._targetWindow, false);
+		if (this._targetWindow != null)
+		{
+			this._pool.Return(this._targetWindow, false);
+			this._targetWindow = null;
+		}
 	}
+}
+
+/// <summary>
+///     Why a <see cref="VcDiffDecoder" /> reported <see cref="OperationStatus.InvalidData" />.
+/// </summary>
+internal enum DecodeFailure
+{
+	None,
+
+	/// <summary>The final input ended before the delta was complete.</summary>
+	Truncated,
+
+	/// <summary>The delta is corrupt or inconsistent with the dictionary.</summary>
+	Malformed,
+
+	/// <summary>A target window is larger than <see cref="VcDecoderOptions.MaxTargetFileSize" />.</summary>
+	TargetWindowTooLarge,
+
+	/// <summary>The header names a secondary compressor other than xdelta3 LZMA (id 2).</summary>
+	UnsupportedSecondaryCompressor
 }

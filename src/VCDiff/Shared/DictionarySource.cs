@@ -13,7 +13,7 @@ namespace VCDiff.Shared;
 ///     The segments are pinned in place and never copied, so the dictionary does not have to be
 ///     available as a single contiguous block of memory.
 /// </summary>
-internal sealed unsafe class DictionarySource : IDisposable
+internal sealed unsafe class DictionarySource : IDictionaryReader
 {
 	private readonly MemoryHandle[] handles;
 	private readonly byte*[] pointers;
@@ -75,29 +75,6 @@ internal sealed unsafe class DictionarySource : IDisposable
 		}
 
 		this.starts[count] = offset;
-		this.shift = this.CalcShift();
-	}
-
-    /// <summary>
-    ///     Wraps an already pinned (or unmanaged) contiguous block. The block is not owned.
-    /// </summary>
-    public DictionarySource(byte* pointer, long length)
-	{
-		if (length > int.MaxValue)
-			throw new ArgumentException("The dictionary can not be larger than 2 GiB.", nameof(length));
-
-		if (length <= 0)
-		{
-			this.pointers = new byte*[0];
-			this.starts = new long[1];
-		}
-		else
-		{
-			this.pointers = new[] { pointer };
-			this.starts = new[] { 0, length };
-		}
-
-		this.handles = Array.Empty<MemoryHandle>();
 		this.shift = this.CalcShift();
 	}
 

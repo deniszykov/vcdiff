@@ -75,6 +75,7 @@ array, a `Memory<byte>`, or multiple segments (e.g. the result of
 | `ChecksumFormat` | `None` | `None`, `SDCH`, or `Xdelta3` window checksum. `Xdelta3` + `Interleaved` throws. |
 | `RollingHash` | `null` | Reusable `RollingHash` (caller owns it); otherwise one is created internally. |
 | `BytePool` | `ArrayPool<byte>.Shared` | Pool used for internal buffers. |
+| `MemoryStreamManager` | library default | `RecyclableMemoryStreamManager` for the pooled streams that hold encoded windows. |
 
 ### 3.2 `VcDecoderOptions`
 
@@ -83,6 +84,7 @@ array, a `Memory<byte>`, or multiple segments (e.g. the result of
 | `MaxTargetFileSize` | `67108864` (64 MiB) | Maximum target window size in bytes. |
 | `DisableChecksums` | `false` | Skip window checksum verification. |
 | `BytePool` | `ArrayPool<byte>.Shared` | Pool used for internal buffers. |
+| `MemoryStreamManager` | library default | `RecyclableMemoryStreamManager` used by `VcDecoder` to buffer a non-seekable dictionary stream. |
 
 ## 4. Dictionary handling
 
@@ -110,9 +112,9 @@ ReadOnlySequence<byte> dictionary = dictStream.GetReadOnlySequence();
 using var encoder = new VcDiffEncoder(dictionary, new VcEncoderOptions { ChecksumFormat = ChecksumFormat.SDCH });
 ```
 
-`VcDiff.ReadDictionary(Stream, string? tag = null)` reads an entire stream into a pooled
-`Microsoft.IO.RecyclableMemoryStream`, i.e. into many small pooled blocks rather than one
-large array. The caller owns the returned stream and must dispose it **after** the
+`VcDiff.ReadDictionary(Stream, string? tag = null, RecyclableMemoryStreamManager? manager = null)`
+reads an entire stream into a pooled `Microsoft.IO.RecyclableMemoryStream` (rented from `manager`, or a
+library-wide default), i.e. into many small pooled blocks rather than one large array. The caller owns the returned stream and must dispose it **after** the
 encoder/decoder that uses its sequence.
 
 ## 5. Usage — driving loops
@@ -172,9 +174,10 @@ static void Decode(VcDiffDecoder decoder, ReadOnlySpan<byte> delta, Stream sink,
         var input = delta.Slice(pos, take);
         pos += take;
 
+        OperationStatus status;
         do
         {
-            var status = decoder.Decode(input, outBuf, out int consumed, out int written, isFinal: false);
+            status = decoder.Decode(input, outBuf, out int consumed, out int written, isFinal: false);
             sink.Write(outBuf.Slice(0, written));
             input = input.Slice(consumed); // may be partial while the output is full
         } while (status == OperationStatus.DestinationTooSmall);

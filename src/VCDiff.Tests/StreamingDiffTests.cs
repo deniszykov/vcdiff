@@ -367,4 +367,155 @@ public class StreamingDiffTests
 
 		Assert.Equal(target, result);
 	}
+
+	// ------------------------------------------------------------------ chunking and segmented dictionaries
+
+	private sealed class Segment : ReadOnlySequenceSegment<byte>
+	{
+		public Segment(ReadOnlyMemory<byte> memory, Segment previous)
+		{
+			this.Memory = memory;
+			if (previous != null)
+			{
+				this.RunningIndex = previous.RunningIndex + previous.Memory.Length;
+				previous.Next = this;
+			}
+		}
+	}
+
+	// Splits data into a multi-segment sequence, cycling through the given segment sizes.
+	private static ReadOnlySequence<byte> Segmented(byte[] data, params int[] sizes)
+	{
+		Segment first = null, last = null;
+		var pos = 0;
+		for (var i = 0; pos < data.Length; i++)
+		{
+			var len = Math.Min(sizes[i % sizes.Length], data.Length - pos);
+			last = new Segment(data.AsMemory(pos, len), last);
+			first ??= last;
+			pos += len;
+		}
+
+		return first == null ? ReadOnlySequence<byte>.Empty : new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
+	}
+
+	private static byte[] EncodeWhole(VcDiffEncoder enc, byte[] target)
+	{
+		var outBuf = new byte[target.Length * 2 + 1024];
+		var result = new MemoryStream();
+		var input = target.AsSpan();
+		while (true)
+		{
+			// The output buffer is large enough, so every call either finishes a window or the stream.
+			var status = enc.Encode(input, outBuf, out var ic, out var ow, true);
+			result.Write(outBuf, 0, ow);
+			input = input.Slice(ic);
+			Assert.Equal(OperationStatus.Done, status);
+			if (input.Length == 0 && ic == 0)
+				break;
+		}
+
+		return result.ToArray();
+	}
+
+	[Theory, InlineData(1, 1, false), InlineData(7, 7, false), InlineData(1, 1, true), InlineData(7, 3, true)]
+	public void RoundTrip_TinyChunks_SegmentedDictionary(int inChunk, int outChunk, bool interleaved)
+	{
+		var dict = MakeDictionary();
+		var target = MakeTarget(dict);
+		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = interleaved ? ChecksumFormat.SDCH : ChecksumFormat.None };
+
+		using var reference = new VcDiffEncoder(Seq(dict), options);
+		var expected = EncodeStreaming(reference, target, 4096, 4096);
+
+		foreach (var dictionary in new[] { Segmented(dict, 1, 7, 64, 3, 1000), Segmented(dict, 256), Segmented(dict, 100) })
+		{
+			using var enc = new VcDiffEncoder(dictionary, options);
+			var delta = EncodeStreaming(enc, target, inChunk, outChunk);
+			Assert.Equal(expected, delta);
+
+			using var dec = new VcDiffDecoder(dictionary);
+			var result = DecodeStreaming(dec, delta, inChunk, outChunk);
+			Assert.Equal(target, result);
+		}
+	}
+
+	[Theory, InlineData(false), InlineData(true)]
+	public void RoundTrip_MultiWindow_WholeBuffers_MatchesChunked(bool interleaved)
+	{
+		var rnd = new Random(7);
+		var dict = new byte[8192];
+		rnd.NextBytes(dict);
+
+		var target = new byte[2 * 1024 * 1024 + 12345];
+		for (var i = 0; i < target.Length; i += dict.Length)
+			dict.AsSpan(0, Math.Min(dict.Length, target.Length - i)).CopyTo(target.AsSpan(i));
+		for (var i = 0; i < 5000; i++)
+			target[rnd.Next(target.Length)] = (byte)rnd.Next(256);
+
+		var options = new VcEncoderOptions { Interleaved = interleaved, ChecksumFormat = ChecksumFormat.SDCH };
+
+		// Whole windows straight from the caller's span vs. windows staged from tiny chunks.
+		using var wholeEncoder = new VcDiffEncoder(Seq(dict), options);
+		var whole = EncodeWhole(wholeEncoder, target);
+		using var chunkedEncoder = new VcDiffEncoder(Segmented(dict, 7, 4096), options);
+		var chunked = EncodeStreaming(chunkedEncoder, target, 7, 5);
+		Assert.Equal(whole, chunked);
+
+		// Whole delta and a large output (decoded in place) vs. tiny input and output chunks.
+		using var wholeDecoder = new VcDiffDecoder(Seq(dict));
+		Assert.Equal(target, DecodeStreaming(wholeDecoder, whole, whole.Length, target.Length));
+		using var chunkedDecoder = new VcDiffDecoder(Segmented(dict, 1, 7, 64));
+		Assert.Equal(target, DecodeStreaming(chunkedDecoder, whole, 7, 3));
+	}
+
+	private sealed class TrickleStream : Stream
+	{
+		private readonly byte[] _data;
+		private int _position;
+
+		public TrickleStream(byte[] data)
+		{
+			this._data = data;
+		}
+
+		public override bool CanRead => true;
+		public override bool CanSeek => false;
+		public override bool CanWrite => false;
+		public override long Length => throw new NotSupportedException();
+
+		public override long Position
+		{
+			get => throw new NotSupportedException();
+			set => throw new NotSupportedException();
+		}
+
+		public override int Read(byte[] buffer, int offset, int count)
+		{
+			var take = Math.Min(Math.Min(count, 1000), this._data.Length - this._position);
+			Array.Copy(this._data, this._position, buffer, offset, take);
+			this._position += take;
+			return take;
+		}
+
+		public override void Flush()
+		{
+		}
+
+		public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+		public override void SetLength(long value) => throw new NotSupportedException();
+		public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+	}
+
+	[Fact]
+	public void ReadDictionary_NonSeekableStream_SpansBlocks()
+	{
+		var data = new byte[300 * 1024 + 17];
+		new Random(3).NextBytes(data);
+
+		using var dictStream = VcDiff.ReadDictionary(new TrickleStream(data));
+		Assert.Equal(0, dictStream.Position);
+		Assert.Equal(data.Length, dictStream.Length);
+		Assert.Equal(data, dictStream.GetReadOnlySequence().ToArray());
+	}
 }

@@ -1,56 +1,101 @@
-﻿// Copyright (c) Metric and the Snowflake Authors.
+// Copyright (c) Metric and the Snowflake Authors.
 // Licensed under the Apache License, Version 2.0.
 
-using System.IO;
+using System;
+using System.Buffers;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
 namespace VCDiff.Decoders;
 
-internal class CustomCodeTableDecoder
+/// <summary>
+///     Decodes the custom code table section of a delta header (RFC 3284 section 7): the near and same cache sizes
+///     followed by the code table, itself delta-encoded as a full VCDIFF stream against the serialized default
+///     code table.
+/// </summary>
+internal sealed class CustomCodeTableDecoder
 {
+	private readonly ArrayPool<byte> _bytePool;
+
 	public byte NearSize { get; private set; }
 
 	public byte SameSize { get; private set; }
 
 	public CodeTable? CustomTable { get; private set; }
 
-	internal VcDiffResult Decode(IByteBuffer source)
+	public CustomCodeTableDecoder(ArrayPool<byte> bytePool)
 	{
-		//the custom codetable itself is a VCDiff file but it is required to be encoded with the standard table
-		//the length should be the first thing after the hdr_indicator if not supporting compression
-		//at least according to the RFC specs.
-		var lengthOfCodeTable = VarIntBe.ParseInt32(source);
+		this._bytePool = bytePool;
+	}
 
-		if (lengthOfCodeTable == 0) return VcDiffResult.ERROR;
+	/// <summary>
+	///     Decodes the section from <paramref name="source" />: the code table length (a varint) followed by that
+	///     many bytes. The sequence must hold the whole section.
+	/// </summary>
+	internal VcDiffResult Decode(ReadOnlySequence<byte> source)
+	{
+		var lengthOfCodeTable = VarIntBe.ParseInt32(source, out var lengthByteCount);
+		if (lengthOfCodeTable <= 0)
+			return VcDiffResult.ERROR;
 
-		using var codeTable = new ByteBuffer(source.ReadBytes(lengthOfCodeTable).ToArray());
+		var codeTable = source.Slice(lengthByteCount);
+		if (codeTable.Length < lengthOfCodeTable)
+			return VcDiffResult.ERROR;
 
-		//according to the RFC specifications the next two items will be the size of near and size of same
-		//they are bytes in the RFC spec, but for some reason Google uses the varint to read which does
-		//the same thing if it is a single byte
-		//but I am going to just read in bytes because it is the RFC standard
-		this.NearSize = codeTable.ReadByte();
-		this.SameSize = codeTable.ReadByte();
+		codeTable = codeTable.Slice(0, lengthOfCodeTable);
+		if (codeTable.IsSingleSegment)
+			return this.DecodeCore(codeTable.FirstSpan);
 
-		if (this.NearSize == 0 || this.SameSize == 0 || this.NearSize > byte.MaxValue || this.SameSize > byte.MaxValue) return VcDiffResult.ERROR;
+		// Rare multi-segment case: consolidate the (small) code table into a pooled contiguous buffer.
+		var rented = this._bytePool.Rent(lengthOfCodeTable);
+		try
+		{
+			codeTable.CopyTo(rented);
+			return this.DecodeCore(rented.AsSpan(0, lengthOfCodeTable));
+		}
+		finally
+		{
+			this._bytePool.Return(rented);
+		}
+	}
 
-		this.CustomTable = new CodeTable();
+	private VcDiffResult DecodeCore(ReadOnlySpan<byte> codeTable)
+	{
+		// The near and same sizes are single bytes in the RFC (open-vcdiff reads them as varints, which is the
+		// same for the valid range).
+		if (codeTable.Length < 2)
+			return VcDiffResult.ERROR;
 
-		//get the original bytes of the default codetable to use as a dictionary
-		using var dictionary = this.CustomTable.GetBytes();
+		this.NearSize = codeTable[0];
+		this.SameSize = codeTable[1];
 
-		//Decode the code table VCDiff file itself
-		//stream the decoded output into a memory stream
-		using var sout = new MemoryStream();
-		var decoder = new VcDecoderEx<ByteBuffer, ByteBuffer>(dictionary, codeTable, sout);
-		var result = decoder.Decode(out var bytesWritten);
+		// Modes are bytes: SELF, HERE, near modes and same modes must all fit in 0..255.
+		if ((int)VcDiffModes.FIRST + this.NearSize + this.SameSize > (int)VcDiffModes.MAX) return VcDiffResult.ERROR;
 
-		if (result != VcDiffResult.SUCCESS || bytesWritten == 0) return VcDiffResult.ERROR;
+		// The decoded table must be exactly CodeTable.SerializedSize bytes; one spare byte detects a longer output.
+		var serialized = this._bytePool.Rent(CodeTable.SerializedSize + 1);
+		try
+		{
+			using var decoder = new VcDiffDecoder(
+				new VcDecoderOptions { BytePool = this._bytePool },
+				new DictionarySource(new ReadOnlySequence<byte>(CodeTable.DefaultBytes)),
+				false);
 
-		//set the new table data that was decoded
-		if (!this.CustomTable.SetBytes(sout.ToArray())) result = VcDiffResult.ERROR;
+			var output = serialized.AsSpan(0, CodeTable.SerializedSize + 1);
+			var status = decoder.Decode(codeTable.Slice(2), output, out _, out var written, true);
+			if (status != OperationStatus.Done)
+				return VcDiffResult.ERROR;
 
-		return result;
+			// The COPY modes of every entry must fit the declared cache sizes.
+			if (!CodeTable.TryCreate(output.Slice(0, written), out var table) || !table!.AreModesValid(this.NearSize, this.SameSize))
+				return VcDiffResult.ERROR;
+
+			this.CustomTable = table;
+			return VcDiffResult.SUCCESS;
+		}
+		finally
+		{
+			this._bytePool.Return(serialized);
+		}
 	}
 }

@@ -10,8 +10,8 @@ using System.Runtime.Intrinsics.X86;
 namespace VCDiff.Encoders;
 
 /// <summary>
-///     A rolling hasher for <see cref="VcEncoder" />.
-///     <see cref="RollingHash" /> may be reused
+///     A rolling hasher for <see cref="VcEncoder" /> and <see cref="VcDiffEncoder" />.
+///     A <see cref="RollingHash" /> may be reused across encoders with the same block size (see <see cref="VcEncoderOptions.RollingHash" />).
 /// </summary>
 public class RollingHash : IDisposable
 {
@@ -21,7 +21,6 @@ public class RollingHash : IDisposable
 
 	private const byte S23_O1 = (2 << 6) | (3 << 4) | (0 << 2) | 1;
 	private const byte SO123 = (0 << 6) | (1 << 4) | (2 << 2) | 3;
-	private const byte SOO2_O = (0 << 6) | (0 << 4) | (2 << 2) | 0;
 	private readonly int[] kMultFactors;
 	private readonly unsafe int* kMultFactorsPtr;
 	private readonly ulong multiplier;
@@ -85,8 +84,8 @@ public class RollingHash : IDisposable
 			var cV = Avx.LoadVector256(&this.kMultFactorsPtr[j - 7]);
 			cV = Avx2.PermuteVar8x32(cV, this.vShuf);
 
-			var qV = Sse2.LoadVector128(buf + i);
-			var sV = Avx2.ConvertToVector256Int32(qV);
+			// Loads exactly the 8 bytes hashed: a 16 byte load would read past the end of the block.
+			var sV = Avx2.ConvertToVector256Int32(buf + i);
 
 			vPs = Avx2.Add(vPs, Avx2.MultiplyLow(cV, sV));
 		}
@@ -111,36 +110,15 @@ public class RollingHash : IDisposable
 	{
 		ulong h = 0;
 		var vPs = Vector128<int>.Zero;
-		var useSse4 = Sse41.IsSupported;
 
 		var i = 0;
 		for (var j = len - i - 1; len - i >= 4; i += 4, j = len - i - 1)
 		{
 			var cV = Sse2.LoadVector128(&this.kMultFactorsPtr[j - 3]);
 			cV = Sse2.Shuffle(cV, SO123);
-			var qV = Sse2.LoadVector128(buf + i);
-
-			Vector128<int> sV;
-			if (useSse4)
-				sV = Sse41.ConvertToVector128Int32(qV);
-			else
-			{
-				qV = Sse2.UnpackLow(qV, qV);
-				sV = Sse2.ShiftRightLogical(Sse2.UnpackLow(qV.AsUInt16(), qV.AsUInt16()).AsInt32(), 24);
-			}
-
-			if (useSse4)
-				vPs = Sse2.Add(vPs, Sse41.MultiplyLow(cV, sV));
-			else
-			{
-				var vTmp1 = Sse2.Multiply(cV.AsUInt32(), sV.AsUInt32());
-				var vTmp2 =
-					Sse2.Multiply(Sse2.ShiftRightLogical128BitLane(cV.AsByte(), 4).AsUInt32(),
-						Sse2.ShiftRightLogical128BitLane(sV.AsByte(), 4).AsUInt32());
-				;
-				vPs = Sse2.Add(vPs, Sse2.UnpackLow(Sse2.Shuffle(vTmp1.AsInt32(), SOO2_O),
-					Sse2.Shuffle(vTmp2.AsInt32(), SOO2_O)));
-			}
+			// Loads exactly the 4 bytes hashed: a 16 byte load would read past the end of the block.
+			var sV = Sse41.ConvertToVector128Int32(buf + i);
+			vPs = Sse2.Add(vPs, Sse41.MultiplyLow(cV, sV));
 		}
 
 		vPs = Sse2.Add(vPs, Sse2.Shuffle(vPs, S23_O1));
@@ -206,7 +184,7 @@ public class RollingHash : IDisposable
     /// <param name="newByte">the first byte of the new data to hash</param>
     /// <returns></returns>
     [SkipLocalsInit, MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public ulong UpdateHash(ulong oldHash, byte firstByte, byte newByte)
+	internal ulong UpdateHash(ulong oldHash, byte firstByte, byte newByte)
 	{
 		// Remove the first byte from the hash
 		var partial = (oldHash + this.removeTable[firstByte]) & (K_BASE - 1);
@@ -218,7 +196,6 @@ public class RollingHash : IDisposable
     /// <summary>
     ///     Dispose the rolling hash instance.
     ///     You must always dispose a manually created hashing instance, or memory leaks will occur.
-    ///     For performance purposes,
     /// </summary>
     public void Dispose()
 	{

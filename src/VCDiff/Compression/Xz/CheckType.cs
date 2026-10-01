@@ -3,7 +3,7 @@
 
 namespace VCDiff.Compression.Xz;
 
-public enum CheckType : byte
+internal enum CheckType : byte
 {
 	NONE = 0x00,
 	CRC32 = 0x01,

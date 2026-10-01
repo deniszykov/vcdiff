@@ -10,25 +10,19 @@ namespace VCDiff.Compression.LZMA;
 
 // Fast LZMA decode path. This mirrors the design of the
 // reference LZMA SDK / 7-Zip C decoder (LzmaDec.c): probabilities are stored in flat ushort
-// arrays (instead of arrays of BitDecoder structs reached through nested decoder objects),
+// arrays (instead of arrays of bit-model structs reached through nested decoder objects),
 // range/code/dictionary-position/input-buffer-position are kept in local variables (pinned
 // with `fixed` and accessed through raw pointers, exactly like the C reference's `probs`/
 // `dic`/`buf` locals) for the duration of the decode loop, instead of being re-read from
 // object fields - and re-bounds-checked - on every bit. Compressed input is consumed from a
-// buffered reader (RangeCoder.Decoder's fast buffer) instead of one virtual Stream.ReadByte()
+// buffered reader (RangeDecoder's fast buffer) instead of one virtual Stream.ReadByte()
 // call per byte.
-//
-// These tables are separate from (and not kept in sync with) the BitDecoder-based tables used
-// by the async decode path (LzmaDecoder.Async.cs), which remains unchanged on every target.
-// Both sets are kept up to date by SetDecoderProperties/Init, so either decode path can be used
-// on a given Decoder instance, as long as sync and async decoding are not interleaved on the
-// same instance.
-public partial class Decoder
+internal sealed partial class LzmaDecoder
 {
 	// Mutable range-coder state threaded through the decode helpers below as a single `ref`
-	// parameter (instead of one `ref` per field), pinned to the RangeCoder.Decoder's fast
+	// parameter (instead of one `ref` per field), pinned to the RangeDecoder's fast
 	// input buffer for the duration of one CodeFast call. Consumed byte count is batched into
-	// RangeCoder.Decoder._total only when the local buffer is refilled/at call exit, instead
+	// RangeDecoder._total only when the local buffer is refilled/at call exit, instead
 	// of touching that field on every single byte.
 	private unsafe struct FastRangeState
 	{
@@ -38,7 +32,7 @@ public partial class Decoder
 		public int InPos;
 		public int InLen;
 		public long Consumed;
-		public RangeCoder.Decoder RangeDecoder;
+		public RangeDecoder RangeDecoder;
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public byte ReadByte()
@@ -83,16 +77,9 @@ public partial class Decoder
 		{
 			this.Dic[this.Pos++] = value;
 			this.Total++;
-			if (this.Pos >= this.WindowSize)
-			{
-				// Rare (once per dictionary-size worth of output): sync locals back, let
-				// OutWindow flush the pending bytes out to the underlying stream and wrap
-				// its position, then reload the (now wrapped) position.
-				this.OutWindow.FastPos = this.Pos;
-				this.OutWindow.FastTotal = this.Total;
-				this.OutWindow.FastFlush();
-				this.Pos = this.OutWindow.FastPos;
-			}
+
+			// Reaching the window end stops the decode loop; OutWindow.Read wraps the position
+			// once the caller has drained the window.
 		}
 
 		public void CopyBlock(int distance, int len)
@@ -110,14 +97,6 @@ public partial class Decoder
 				this.Pos += fastSize;
 				p += fastSize;
 				this.Total += fastSize;
-				if (this.Pos >= this.WindowSize)
-				{
-					this.OutWindow.FastPos = this.Pos;
-					this.OutWindow.FastTotal = this.Total;
-					this.OutWindow.FastFlush();
-					this.Pos = this.OutWindow.FastPos;
-				}
-
 				rem -= fastSize;
 			}
 
@@ -144,13 +123,13 @@ public partial class Decoder
 	// overlapping ASM-oriented addressing, to keep the arithmetic straightforward and safe.
 	private const int LEN_CHOICE_INDEX = 0;
 	private const int LEN_HIGH_BASE = LEN_MID_BASE + LEN_MID_SIZE;
-	private const int LEN_HIGH_SIZE = 1 << Base.K_NUM_HIGH_LEN_BITS; // 256
+	private const int LEN_HIGH_SIZE = 1 << LzmaBase.K_NUM_HIGH_LEN_BITS; // 256
 	private const int LEN_LOW_BASE = 2;
-	private const int LEN_LOW_SIZE = (int)Base.K_NUM_POS_STATES_MAX * LEN_LOW_STRIDE; // 128
-	private const int LEN_LOW_STRIDE = 1 << Base.K_NUM_LOW_LEN_BITS; // 8
+	private const int LEN_LOW_SIZE = (int)LzmaBase.K_NUM_POS_STATES_MAX * LEN_LOW_STRIDE; // 128
+	private const int LEN_LOW_STRIDE = 1 << LzmaBase.K_NUM_LOW_LEN_BITS; // 8
 	private const int LEN_MID_BASE = LEN_LOW_BASE + LEN_LOW_SIZE;
-	private const int LEN_MID_SIZE = (int)Base.K_NUM_POS_STATES_MAX * LEN_MID_STRIDE; // 128
-	private const int LEN_MID_STRIDE = 1 << Base.K_NUM_MID_LEN_BITS; // 8
+	private const int LEN_MID_SIZE = (int)LzmaBase.K_NUM_POS_STATES_MAX * LEN_MID_STRIDE; // 128
+	private const int LEN_MID_STRIDE = 1 << LzmaBase.K_NUM_MID_LEN_BITS; // 8
 	private const int LEN_PROBS_SIZE = LEN_HIGH_BASE + LEN_HIGH_SIZE;
 
 	private ushort[] _fIsMatch = null!;
@@ -172,15 +151,15 @@ public partial class Decoder
 
 	private void CreateFastModel(int lp, int lc)
 	{
-		this._fIsMatch ??= new ushort[Base.K_NUM_STATES << Base.K_NUM_POS_STATES_BITS_MAX];
-		this._fIsRep ??= new ushort[Base.K_NUM_STATES];
-		this._fIsRepG0 ??= new ushort[Base.K_NUM_STATES];
-		this._fIsRepG1 ??= new ushort[Base.K_NUM_STATES];
-		this._fIsRepG2 ??= new ushort[Base.K_NUM_STATES];
-		this._fIsRep0Long ??= new ushort[Base.K_NUM_STATES << Base.K_NUM_POS_STATES_BITS_MAX];
-		this._fPosSlot ??= new ushort[Base.K_NUM_LEN_TO_POS_STATES << Base.K_NUM_POS_SLOT_BITS];
-		this._fPosDecoders ??= new ushort[Base.K_NUM_FULL_DISTANCES - Base.K_END_POS_MODEL_INDEX];
-		this._fPosAlign ??= new ushort[1 << Base.K_NUM_ALIGN_BITS];
+		this._fIsMatch ??= new ushort[LzmaBase.K_NUM_STATES << LzmaBase.K_NUM_POS_STATES_BITS_MAX];
+		this._fIsRep ??= new ushort[LzmaBase.K_NUM_STATES];
+		this._fIsRepG0 ??= new ushort[LzmaBase.K_NUM_STATES];
+		this._fIsRepG1 ??= new ushort[LzmaBase.K_NUM_STATES];
+		this._fIsRepG2 ??= new ushort[LzmaBase.K_NUM_STATES];
+		this._fIsRep0Long ??= new ushort[LzmaBase.K_NUM_STATES << LzmaBase.K_NUM_POS_STATES_BITS_MAX];
+		this._fPosSlot ??= new ushort[LzmaBase.K_NUM_LEN_TO_POS_STATES << LzmaBase.K_NUM_POS_SLOT_BITS];
+		this._fPosDecoders ??= new ushort[LzmaBase.K_NUM_FULL_DISTANCES - LzmaBase.K_END_POS_MODEL_INDEX];
+		this._fPosAlign ??= new ushort[1 << LzmaBase.K_NUM_ALIGN_BITS];
 		this._fLenProbs ??= new ushort[LEN_PROBS_SIZE];
 		this._fRepLenProbs ??= new ushort[LEN_PROBS_SIZE];
 
@@ -196,7 +175,7 @@ public partial class Decoder
 
 	private void InitFastModel()
 	{
-		const ushort PROB_INIT = (ushort)(BitDecoder.K_BIT_MODEL_TOTAL >> 1);
+		const ushort PROB_INIT = (ushort)(RangeDecoder.K_BIT_MODEL_TOTAL >> 1);
 		Array.Fill(this._fIsMatch, PROB_INIT);
 		Array.Fill(this._fIsRep, PROB_INIT);
 		Array.Fill(this._fIsRepG0, PROB_INIT);
@@ -215,7 +194,7 @@ public partial class Decoder
 	(
 		int dictionarySize,
 		OutWindow outWindow,
-		RangeCoder.Decoder rangeDecoder
+		RangeDecoder rangeDecoder
 	)
 	{
 		var dictionarySizeCheck = Math.Max(dictionarySize, 1);
@@ -269,7 +248,7 @@ public partial class Decoder
 
 				// (stateIndex << K_NUM_POS_STATES_BITS_MAX) + posState is used both as the
 				// IsMatch index and (numerically identical) the IsRep0Long/"short rep" index.
-				var matchIndex = (int)((stateIndex << Base.K_NUM_POS_STATES_BITS_MAX) + posState);
+				var matchIndex = (int)((stateIndex << LzmaBase.K_NUM_POS_STATES_BITS_MAX) + posState);
 
 				// prevByte/matchByte only depend on os.Pos/_rep0, both already fixed from the
 				// previous iteration - independent of the upcoming (unavoidably branchy, since
@@ -324,6 +303,9 @@ public partial class Decoder
 					{
 						if (DecodeBitFast(ref rs, pIsRep0Long, matchIndex) == 0)
 						{
+							// A short rep copies the byte at rep0; with an empty window there is none.
+							if (os.Total == 0) throw new InvalidFormatException("LZMA data error");
+
 							this._state.UpdateShortRep();
 							os.PutByte(os.GetByte((int)this._rep0));
 							continue;
@@ -351,7 +333,7 @@ public partial class Decoder
 						this._rep0 = distance;
 					}
 
-					len = LenDecodeFast(ref rs, pRepLenProbs, posState) + Base.K_MATCH_MIN_LEN;
+					len = LenDecodeFast(ref rs, pRepLenProbs, posState) + LzmaBase.K_MATCH_MIN_LEN;
 					this._state.UpdateRep();
 				}
 				else
@@ -359,19 +341,19 @@ public partial class Decoder
 					this._rep3 = this._rep2;
 					this._rep2 = this._rep1;
 					this._rep1 = this._rep0;
-					len = Base.K_MATCH_MIN_LEN + LenDecodeFast(ref rs, pLenProbs, posState);
+					len = LzmaBase.K_MATCH_MIN_LEN + LenDecodeFast(ref rs, pLenProbs, posState);
 					this._state.UpdateMatch();
 					var posSlot = BitTreeDecodeFast(
 						ref rs,
 						pPosSlot,
-						(int)(Base.GetLenToPosState(len) << Base.K_NUM_POS_SLOT_BITS),
-						Base.K_NUM_POS_SLOT_BITS
+						(int)(LzmaBase.GetLenToPosState(len) << LzmaBase.K_NUM_POS_SLOT_BITS),
+						LzmaBase.K_NUM_POS_SLOT_BITS
 					);
-					if (posSlot >= Base.K_START_POS_MODEL_INDEX)
+					if (posSlot >= LzmaBase.K_START_POS_MODEL_INDEX)
 					{
 						var numDirectBits = (int)((posSlot >> 1) - 1);
 						this._rep0 = (2 | (posSlot & 1)) << numDirectBits;
-						if (posSlot < Base.K_END_POS_MODEL_INDEX)
+						if (posSlot < LzmaBase.K_END_POS_MODEL_INDEX)
 						{
 							this._rep0 += BitTreeReverseDecodeFast(
 								ref rs,
@@ -383,12 +365,12 @@ public partial class Decoder
 						else
 						{
 							this._rep0 +=
-								DecodeDirectBitsFast(ref rs, numDirectBits - Base.K_NUM_ALIGN_BITS) << Base.K_NUM_ALIGN_BITS;
+								DecodeDirectBitsFast(ref rs, numDirectBits - LzmaBase.K_NUM_ALIGN_BITS) << LzmaBase.K_NUM_ALIGN_BITS;
 							this._rep0 += BitTreeReverseDecodeFast(
 								ref rs,
 								pPosAlign,
 								0,
-								Base.K_NUM_ALIGN_BITS
+								LzmaBase.K_NUM_ALIGN_BITS
 							);
 						}
 					}
@@ -410,7 +392,7 @@ public partial class Decoder
 					rangeDecoder.AddTotal(rs.Consumed);
 					outWindow.FastPos = os.Pos;
 					outWindow.FastTotal = os.Total;
-					throw new DataErrorException();
+					throw new InvalidFormatException("LZMA data error");
 				}
 
 				os.CopyBlock((int)this._rep0, (int)len);
@@ -442,7 +424,7 @@ public partial class Decoder
 	)
 	{
 		var range = rs.Range;
-		var bound = (range >> BitDecoder.K_NUM_BIT_MODEL_TOTAL_BITS) * prob;
+		var bound = (range >> RangeDecoder.K_NUM_BIT_MODEL_TOTAL_BITS) * prob;
 
 		// Branchless bit decode + probability update, mirroring 7-Zip's ASM decoder
 		// (Asm/x86/LzmaDecOpt.asm) rather than the reference C decoder's data-dependent
@@ -462,11 +444,11 @@ public partial class Decoder
 		// logical-shift result from a target of 0, so both formulas collapse into one
 		// branchless expression selected by the same mask used above.
 		var target = (int)(
-			(BitDecoder.K_BIT_MODEL_TOTAL & ~mask) | K_BIT_MODEL_OFFSET_FAST & mask
+			(RangeDecoder.K_BIT_MODEL_TOTAL & ~mask) | K_BIT_MODEL_OFFSET_FAST & mask
 		);
 		*probSlot = (ushort)((int)prob + ((target - (int)prob) >> K_NUM_MOVE_BITS_FAST));
 
-		if (rs.Range < RangeCoder.Decoder.K_TOP_VALUE)
+		if (rs.Range < RangeDecoder.K_TOP_VALUE)
 		{
 			rs.Range <<= 8;
 			rs.Code = (rs.Code << 8) | rs.ReadByte();
@@ -490,12 +472,12 @@ public partial class Decoder
 	private static uint DecodeBitFastNoUpdate(ref FastRangeState rs, uint prob, out uint mask)
 	{
 		var range = rs.Range;
-		var bound = (range >> BitDecoder.K_NUM_BIT_MODEL_TOTAL_BITS) * prob;
+		var bound = (range >> RangeDecoder.K_NUM_BIT_MODEL_TOTAL_BITS) * prob;
 		var symbol = rs.Code < bound ? 0u : 1u;
 		mask = (uint)-(int)symbol;
 		rs.Range = (bound & ~mask) | ((range - bound) & mask);
 		rs.Code -= bound & mask;
-		if (rs.Range < RangeCoder.Decoder.K_TOP_VALUE)
+		if (rs.Range < RangeDecoder.K_TOP_VALUE)
 		{
 			rs.Range <<= 8;
 			rs.Code = (rs.Code << 8) | rs.ReadByte();
@@ -508,7 +490,7 @@ public partial class Decoder
 	private static unsafe void UpdateProbFast(ushort* probSlot, uint prob, uint mask)
 	{
 		var target = (int)(
-			(BitDecoder.K_BIT_MODEL_TOTAL & ~mask) | K_BIT_MODEL_OFFSET_FAST & mask
+			(RangeDecoder.K_BIT_MODEL_TOTAL & ~mask) | K_BIT_MODEL_OFFSET_FAST & mask
 		);
 		*probSlot = (ushort)((int)prob + ((target - (int)prob) >> K_NUM_MOVE_BITS_FAST));
 	}
@@ -599,7 +581,7 @@ public partial class Decoder
 			var t = (rs.Code - rs.Range) >> 31;
 			rs.Code -= rs.Range & (t - 1);
 			result = (result << 1) | (1 - t);
-			if (rs.Range < RangeCoder.Decoder.K_TOP_VALUE)
+			if (rs.Range < RangeDecoder.K_TOP_VALUE)
 			{
 				rs.Code = (rs.Code << 8) | rs.ReadByte();
 				rs.Range <<= 8;
@@ -618,24 +600,24 @@ public partial class Decoder
 				ref rs,
 				probs,
 				LEN_LOW_BASE + (int)posState * LEN_LOW_STRIDE,
-				Base.K_NUM_LOW_LEN_BITS
+				LzmaBase.K_NUM_LOW_LEN_BITS
 			);
 		}
 
-		var symbol = Base.K_NUM_LOW_LEN_SYMBOLS;
+		var symbol = LzmaBase.K_NUM_LOW_LEN_SYMBOLS;
 		if (DecodeBitFast(ref rs, probs, LEN_CHOICE2_INDEX) == 0)
 		{
 			symbol += BitTreeDecodeFast(
 				ref rs,
 				probs,
 				LEN_MID_BASE + (int)posState * LEN_MID_STRIDE,
-				Base.K_NUM_MID_LEN_BITS
+				LzmaBase.K_NUM_MID_LEN_BITS
 			);
 		}
 		else
 		{
-			symbol += Base.K_NUM_MID_LEN_SYMBOLS;
-			symbol += BitTreeDecodeFast(ref rs, probs, LEN_HIGH_BASE, Base.K_NUM_HIGH_LEN_BITS);
+			symbol += LzmaBase.K_NUM_MID_LEN_SYMBOLS;
+			symbol += BitTreeDecodeFast(ref rs, probs, LEN_HIGH_BASE, LzmaBase.K_NUM_HIGH_LEN_BITS);
 		}
 
 		return symbol;

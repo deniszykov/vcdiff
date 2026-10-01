@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Runtime.CompilerServices;
 using Microsoft.IO;
@@ -10,54 +11,47 @@ using VCDiff.Shared;
 
 namespace VCDiff.Encoders;
 
-internal class WindowEncoder : IDisposable
+internal sealed class WindowEncoder : IDisposable
 {
-	private readonly RecyclableMemoryStream addressForCopy;
-	private readonly RecyclableMemoryStream dataForAddAndRun;
-	private readonly long dictionarySize;
-	private readonly InstructionMap instrMap;
+	// Window indicator + 3 varint32 (dictionary size, start, delta length) + varint32 target length + delta indicator
+	// + 3 varint32 section lengths + varint64 / 4 byte checksum.
+	private const int MAX_HEADER_SIZE = 1 + 3 * VarIntBe.MAX_INT32_LENGTH + VarIntBe.MAX_INT32_LENGTH + 1 + 3 * VarIntBe.MAX_INT32_LENGTH + VarIntBe.MAX_INT64_LENGTH;
+
+	// Windows are always encoded with the default code table and address cache sizes (see InstructionMap).
+	private readonly AddressCache addrCache = new();
 
 	// Pooled, block based streams: a window never needs one contiguous buffer.
+	private readonly RecyclableMemoryStream addressForCopy;
+	private readonly ChecksumFormat checksumFormat;
+	private readonly RecyclableMemoryStream dataForAddAndRun;
+	private readonly long dictionarySize;
 	private readonly RecyclableMemoryStream instructionAndSizes;
-	private AddressCache addrCache;
+	private readonly InstructionMap instrMap = InstructionMap.Instance;
+	private readonly bool interleaved;
+	private uint checksum;
+	private bool disposed;
 	private byte lastOpcode;
 	private int lastOpcodeIndex;
-	private int maxMode;
-	private CodeTable table;
 	private long targetLength;
-
-	public ChecksumFormat ChecksumFormat { get; }
-
-	public bool IsInterleaved { get; }
-
-	public uint Checksum { get; private set; }
 
 	//This is a window encoder for the VCDIFF format
 	//it is reused for every window, call Reset before encoding each one
-	public WindowEncoder(long dictionarySize, ChecksumFormat checksumFormat, bool interleaved)
+	public WindowEncoder(long dictionarySize, ChecksumFormat checksumFormat, bool interleaved, RecyclableMemoryStreamManager manager)
 	{
-		this.ChecksumFormat = checksumFormat;
-		this.IsInterleaved = interleaved;
+		this.checksumFormat = checksumFormat;
+		this.interleaved = interleaved;
 		this.dictionarySize = dictionarySize;
-
-		// The encoder currently doesn't support encoding with a custom table
-		// will be added in later since it will be easy as decoding is already implemented
-		this.maxMode = AddressCache.DefaultLast;
-		this.table = CodeTable.DefaultTable;
-		this.addrCache = new AddressCache();
-		this.targetLength = 0;
 		this.lastOpcodeIndex = -1;
-		this.instrMap = InstructionMap.Instance;
 
 		//Separate buffers for each type if not interleaved
 		if (!interleaved)
 		{
-			this.instructionAndSizes = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
-			this.dataForAddAndRun = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
-			this.addressForCopy = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
+			this.instructionAndSizes = manager.GetStream(nameof(WindowEncoder));
+			this.dataForAddAndRun = manager.GetStream(nameof(WindowEncoder));
+			this.addressForCopy = manager.GetStream(nameof(WindowEncoder));
 		}
 		else
-			this.instructionAndSizes = this.dataForAddAndRun = this.addressForCopy = Pool.MemoryStreamManager.GetStream(nameof(WindowEncoder));
+			this.instructionAndSizes = this.dataForAddAndRun = this.addressForCopy = manager.GetStream(nameof(WindowEncoder));
 	}
 
     /// <summary>
@@ -66,8 +60,8 @@ internal class WindowEncoder : IDisposable
     /// <param name="checksum">The checksum of the window, ignored if no checksum format is used.</param>
     public void Reset(uint checksum)
 	{
-		this.Checksum = checksum;
-		this.addrCache = new AddressCache();
+		this.checksum = checksum;
+		this.addrCache.Reset();
 		this.targetLength = 0;
 		this.lastOpcodeIndex = -1;
 		this.dataForAddAndRun.SetLength(0);
@@ -108,8 +102,9 @@ internal class WindowEncoder : IDisposable
 				this.ReplaceLastOpcode((byte)compoundOp);
 
 				//append size to instructionAndSizes
-				VarIntBe.AppendInt32(size, this.instructionAndSizes);
+				VarIntBe.Append(size, this.instructionAndSizes);
 				this.lastOpcodeIndex = -1;
+				return;
 			}
 		}
 
@@ -133,7 +128,7 @@ internal class WindowEncoder : IDisposable
 		this.instructionAndSizes.WriteByte((byte)opcode);
 		this.lastOpcode = (byte)opcode;
 		this.lastOpcodeIndex = (int)this.instructionAndSizes.Length - 1;
-		VarIntBe.AppendInt32(size, this.instructionAndSizes);
+		VarIntBe.Append(size, this.instructionAndSizes);
 	}
 
 	public void Add(ReadOnlySpan<byte> data)
@@ -148,50 +143,43 @@ internal class WindowEncoder : IDisposable
 	{
 		var mode = this.addrCache.EncodeAddress(offset, this.dictionarySize + this.targetLength, out var encodedAddr);
 		this.EncodeInstruction(VcDiffInstructionType.COPY, length, mode);
-		if (this.addrCache.WriteAddressAsVarint(mode))
-			VarIntBe.AppendInt64(encodedAddr, this.addressForCopy);
+		if (!this.addrCache.IsSameMode(mode))
+			VarIntBe.Append(encodedAddr, this.addressForCopy);
 		else
 			this.addressForCopy.WriteByte((byte)encodedAddr);
 
 		this.targetLength += length;
 	}
 
-	public void Run(int size, byte b)
-	{
-		this.EncodeInstruction(VcDiffInstructionType.RUN, size);
-		this.dataForAddAndRun.WriteByte(b);
-		this.targetLength += size;
-	}
-
 	private int CalculateLengthOfTheDeltaEncoding()
 	{
-		if (this.IsInterleaved)
+		if (this.interleaved)
 		{
-			return VarIntBe.CalcInt32Length((int)this.targetLength) +
+			return VarIntBe.GetLength(this.targetLength) +
 				1 +
-				VarIntBe.CalcInt32Length(0) +
-				VarIntBe.CalcInt32Length((int)this.instructionAndSizes.Length) +
-				VarIntBe.CalcInt32Length(0) +
+				VarIntBe.GetLength(0) +
+				VarIntBe.GetLength(this.instructionAndSizes.Length) +
+				VarIntBe.GetLength(0) +
 				0 +
 				(int)this.instructionAndSizes.Length
 
 				// interleaved implies SDCH checksum if any.
 				+
-				(this.ChecksumFormat == ChecksumFormat.SDCH ? VarIntBe.CalcInt64Length(this.Checksum) : 0);
+				(this.checksumFormat == ChecksumFormat.SDCH ? VarIntBe.GetLength(this.checksum) : 0);
 		}
 
-		var lengthOfDelta = VarIntBe.CalcInt32Length((int)this.targetLength) +
+		var lengthOfDelta = VarIntBe.GetLength(this.targetLength) +
 			1 +
-			VarIntBe.CalcInt32Length((int)this.dataForAddAndRun.Length) +
-			VarIntBe.CalcInt32Length((int)this.instructionAndSizes.Length) +
-			VarIntBe.CalcInt32Length((int)this.addressForCopy.Length) +
+			VarIntBe.GetLength(this.dataForAddAndRun.Length) +
+			VarIntBe.GetLength(this.instructionAndSizes.Length) +
+			VarIntBe.GetLength(this.addressForCopy.Length) +
 			(int)this.dataForAddAndRun.Length +
 			(int)this.instructionAndSizes.Length +
 			(int)this.addressForCopy.Length;
 
-		if (this.ChecksumFormat == ChecksumFormat.SDCH)
-			lengthOfDelta += VarIntBe.CalcInt64Length(this.Checksum);
-		else if (this.ChecksumFormat == ChecksumFormat.Xdelta3) lengthOfDelta += 4;
+		if (this.checksumFormat == ChecksumFormat.SDCH)
+			lengthOfDelta += VarIntBe.GetLength(this.checksum);
+		else if (this.checksumFormat == ChecksumFormat.Xdelta3) lengthOfDelta += 4;
 
 		return lengthOfDelta;
 	}
@@ -200,70 +188,77 @@ internal class WindowEncoder : IDisposable
 	{
 		var lengthOfDelta = this.CalculateLengthOfTheDeltaEncoding();
 
-		//Google's Checksum Implementation Support
-		if (this.ChecksumFormat != ChecksumFormat.None)
-			outputStream.WriteByte((byte)VcDiffWindowFlags.VCDSOURCE | (byte)VcDiffWindowFlags.VCDCHECKSUM); //win indicator
-		else
-			outputStream.WriteByte((byte)VcDiffWindowFlags.VCDSOURCE); //win indicator
-		VarIntBe.AppendInt32((int)this.dictionarySize, outputStream); //dictionary size
-		VarIntBe.AppendInt32(0, outputStream); //dictionary start position 0 is default aka encompass the whole dictionary
+		// The window header is assembled on the stack and written with a single call,
+		// the sections are then written straight from the pooled blocks of their streams.
+		Span<byte> header = stackalloc byte[MAX_HEADER_SIZE];
+		var pos = 0;
 
-		VarIntBe.AppendInt32(lengthOfDelta, outputStream); //length of delta
+		//Google's Checksum Implementation Support
+		if (this.checksumFormat != ChecksumFormat.None)
+			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE | (byte)VcDiffWindowFlags.VCDCHECKSUM; //win indicator
+		else
+			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE; //win indicator
+		pos += VarIntBe.Write(this.dictionarySize, header.Slice(pos)); //dictionary size
+		pos += VarIntBe.Write(0, header.Slice(pos)); //dictionary start position 0 is default aka encompass the whole dictionary
+
+		pos += VarIntBe.Write(lengthOfDelta, header.Slice(pos)); //length of delta
 
 		//begin of delta encoding
-		var sizeBeforeDelta = outputStream.Position;
-		VarIntBe.AppendInt32((int)this.targetLength, outputStream); //final target length after decoding
-		outputStream.WriteByte(0x00); // uncompressed
+		var sizeBeforeDelta = pos;
+		pos += VarIntBe.Write(this.targetLength, header.Slice(pos)); //final target length after decoding
+		header[pos++] = 0x00; // uncompressed
 
 		// [Here is where a secondary compressor would be used
 		//  if the encoder and decoder supported that feature.]
 
-		//non interleaved then it is separeat areas for each type
-		if (!this.IsInterleaved)
-		{
-			VarIntBe.AppendInt32((int)this.dataForAddAndRun.Length, outputStream); //length of add/run
-			VarIntBe.AppendInt32((int)this.instructionAndSizes.Length, outputStream); //length of instructions and sizes
-			VarIntBe.AppendInt32((int)this.addressForCopy.Length, outputStream); //length of addresses for copys
+		long sectionsLength;
 
-			switch (this.ChecksumFormat)
+		//non interleaved then it is separeat areas for each type
+		if (!this.interleaved)
+		{
+			pos += VarIntBe.Write(this.dataForAddAndRun.Length, header.Slice(pos)); //length of add/run
+			pos += VarIntBe.Write(this.instructionAndSizes.Length, header.Slice(pos)); //length of instructions and sizes
+			pos += VarIntBe.Write(this.addressForCopy.Length, header.Slice(pos)); //length of addresses for copys
+
+			switch (this.checksumFormat)
 			{
 				//Google Checksum Support
 				case ChecksumFormat.SDCH:
-					VarIntBe.AppendInt64(this.Checksum, outputStream);
+					pos += VarIntBe.Write(this.checksum, header.Slice(pos));
 					break;
 
 				// Xdelta checksum support.
 				case ChecksumFormat.Xdelta3:
-				{
-					Span<byte> checksumBytes = stackalloc[] {
-						(byte)(this.Checksum >> 24), (byte)(this.Checksum >> 16), (byte)(this.Checksum >> 8), (byte)(this.Checksum & 0x000000FF)
-					};
-					outputStream.Write(checksumBytes);
+					BinaryPrimitives.WriteUInt32BigEndian(header.Slice(pos), this.checksum);
+					pos += sizeof(uint);
 					break;
-				}
 			}
 
+			outputStream.Write(header.Slice(0, pos));
 			this.dataForAddAndRun.WriteTo(outputStream); //data section for adds and runs
 			this.instructionAndSizes.WriteTo(outputStream); //data for instructions and sizes
 			this.addressForCopy.WriteTo(outputStream); //data for addresses section copys
+			sectionsLength = this.dataForAddAndRun.Length + this.instructionAndSizes.Length + this.addressForCopy.Length;
 		}
 		else
 		{
 			//interleaved everything is woven in and out in one block
-			VarIntBe.AppendInt32(0, outputStream); //length of add/run
-			VarIntBe.AppendInt32((int)this.instructionAndSizes.Length, outputStream); //length of instructions and sizes + other data for interleaved
-			VarIntBe.AppendInt32(0, outputStream); //length of addresses for copys
+			pos += VarIntBe.Write(0, header.Slice(pos)); //length of add/run
+			pos += VarIntBe.Write(this.instructionAndSizes.Length, header.Slice(pos)); //length of instructions and sizes + other data for interleaved
+			pos += VarIntBe.Write(0, header.Slice(pos)); //length of addresses for copys
 
 			//Google Checksum Support
-			if (this.ChecksumFormat == ChecksumFormat.SDCH) VarIntBe.AppendInt64(this.Checksum, outputStream);
+			if (this.checksumFormat == ChecksumFormat.SDCH) pos += VarIntBe.Write(this.checksum, header.Slice(pos));
 
+			outputStream.Write(header.Slice(0, pos));
 			this.instructionAndSizes.WriteTo(outputStream); //data for instructions and sizes, in interleaved it is everything
+			sectionsLength = this.instructionAndSizes.Length;
 		}
 
 		//end of delta encoding
 
-		var sizeAfterDelta = outputStream.Position;
-		if (lengthOfDelta != sizeAfterDelta - sizeBeforeDelta) throw new IOException("Delta output length does not match");
+		// Counted rather than read from outputStream.Position, so the output stream does not have to be seekable.
+		if (lengthOfDelta != pos - sizeBeforeDelta + sectionsLength) throw new IOException("Delta output length does not match");
 
 		this.dataForAddAndRun.SetLength(0);
 		this.instructionAndSizes.SetLength(0);
@@ -273,8 +268,12 @@ internal class WindowEncoder : IDisposable
 
 	public void Dispose()
 	{
+		if (this.disposed)
+			return;
+
+		this.disposed = true;
 		this.instructionAndSizes.Dispose();
-		if (!this.IsInterleaved)
+		if (!this.interleaved)
 		{
 			this.dataForAddAndRun.Dispose();
 			this.addressForCopy.Dispose();

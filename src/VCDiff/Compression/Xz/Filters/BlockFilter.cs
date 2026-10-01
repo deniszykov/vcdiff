@@ -3,44 +3,35 @@
 
 using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.IO;
 
 namespace VCDiff.Compression.Xz.Filters;
 
-public abstract class BlockFilter : ReadOnlyStream
+internal abstract class BlockFilter : ReadOnlyStream
 {
-	private enum FilterTypes : ulong
-	{
-		Lzma2 = 0x21
-	}
-
-	private static readonly Dictionary<FilterTypes, Func<BlockFilter>> FilterMap = new() {
-		{ FilterTypes.Lzma2, () => new Lzma2Filter() }
-	};
+	private const ulong LZMA2_FILTER_ID = 0x21;
 
 	public abstract bool AllowAsLast { get; }
 	public abstract bool AllowAsNonLast { get; }
 	public abstract bool ChangesDataSize { get; }
 
-	internal ArrayPool<byte>? BytePool { get; set; }
+	protected ArrayPool<byte>? BytePool { get; private set; }
 
-	public abstract void Init(byte[] properties);
-	public abstract void ValidateFilter();
+	protected abstract void Init(ReadOnlySpan<byte> properties);
 
-	public static BlockFilter Read(BinaryReader reader, ArrayPool<byte>? bytePool = null)
+	public static BlockFilter Read(ref XzSpanReader reader, ArrayPool<byte>? bytePool = null)
 	{
-		var filterType = (FilterTypes)reader.ReadXzInteger();
-		if (!FilterMap.TryGetValue(filterType, out var createFilter)) throw new NotImplementedException($"Filter {filterType} has not yet been implemented");
-
-		var filter = createFilter();
+		var filterType = reader.ReadXzInteger();
+		BlockFilter filter = filterType switch {
+			LZMA2_FILTER_ID => new Lzma2Filter(),
+			_ => throw new NotImplementedException($"Filter {filterType} has not yet been implemented")
+		};
 		filter.BytePool = bytePool;
 
 		var sizeOfProperties = reader.ReadXzInteger();
 		if (sizeOfProperties > int.MaxValue) throw new InvalidFormatException("Block filter information too large");
 
-		var properties = reader.ReadBytes((int)sizeOfProperties);
-		filter.Init(properties);
+		filter.Init(reader.ReadBytes((int)sizeOfProperties));
 		return filter;
 	}
 

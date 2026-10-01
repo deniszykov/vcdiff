@@ -7,9 +7,9 @@ using VCDiff.Shared;
 
 namespace VCDiff.Encoders;
 
-internal unsafe class BlockHash : IDisposable
+internal sealed unsafe class BlockHash : IDisposable
 {
-	public ref struct Match
+	internal ref struct Match
 	{
 		public long Size;
 		public long SOffset;
@@ -26,6 +26,7 @@ internal unsafe class BlockHash : IDisposable
 	}
 
 	private const int MAX_PROBES = 16;
+	private const int MAX_STACK_STRADDLE = 256;
 	private readonly int blocksCount;
 	internal readonly int BlockSize;
 	private readonly RollingHash hasher;
@@ -59,7 +60,7 @@ internal unsafe class BlockHash : IDisposable
 
 		this.hashTableMask = (ulong)tableSize - 1;
 
-		this.hashTable = new NativeAllocation<int>(tableSize);
+		this.hashTable = new NativeAllocation<int>((int)tableSize);
 		this.nextBlockTable = new NativeAllocation<int>(this.blocksCount);
 		this.lastBlockTable = new NativeAllocation<int>(this.blocksCount);
 
@@ -74,9 +75,9 @@ internal unsafe class BlockHash : IDisposable
 
 	private void SetTablesToInvalid()
 	{
-		new Span<int>(this.lastBlockTable.Pointer, (int)this.lastBlockTable.NumItems).Fill(-1);
-		new Span<int>(this.nextBlockTable.Pointer, (int)this.nextBlockTable.NumItems).Fill(-1);
-		new Span<int>(this.hashTable.Pointer, (int)this.hashTable.NumItems).Fill(-1);
+		this.lastBlockTable.AsSpan().Fill(-1);
+		this.nextBlockTable.AsSpan().Fill(-1);
+		this.hashTable.AsSpan().Fill(-1);
 	}
 
 	private long CalcTableSize()
@@ -101,10 +102,11 @@ internal unsafe class BlockHash : IDisposable
     /// <summary>
     ///     Hashes every block of the dictionary into the table.
     /// </summary>
+    [SkipLocalsInit]
     public void AddAllBlocks()
 	{
-		// Holds a block that straddles two dictionary segments.
-		var straddle = new byte[this.BlockSize];
+		// Holds a block that straddles two dictionary segments. Block sizes are small in practice.
+		Span<byte> straddle = this.BlockSize <= MAX_STACK_STRADDLE ? stackalloc byte[this.BlockSize] : new byte[this.BlockSize];
 		fixed (byte* straddlePtr = straddle)
 		{
 			for (var block = this.lastBlockAdded + 1; block < this.blocksCount; block++)

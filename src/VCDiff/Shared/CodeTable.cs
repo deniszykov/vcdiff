@@ -2,25 +2,24 @@
 // Licensed under the Apache License, Version 2.0.
 
 using System;
+using System.Buffers;
 using VCDiff.Includes;
 
 namespace VCDiff.Shared;
 
-internal class CodeTable : IDisposable
+internal sealed class CodeTable
 {
 	public const byte A = (byte)VcDiffInstructionType.ADD;
 	public const byte C = (byte)VcDiffInstructionType.COPY;
-	public const byte EOD = (byte)VcDiffInstructionType.EOD;
-	public const byte ERR = (byte)VcDiffInstructionType.ERROR;
 
 	public const byte N = (byte)VcDiffInstructionType.NOOP;
-	public const byte R = (byte)VcDiffInstructionType.RUN;
+	private const byte R = (byte)VcDiffInstructionType.RUN;
 
-	public static readonly int KCodeTableSize = 256;
-    /// <summary>
-    ///     Default CodeTable as described in the RFC doc
-    /// </summary>
-    public static readonly int KNoOpcode = 0x100;
+	public const int KCodeTableSize = 256;
+	/// <summary>
+	///     Marker for "no opcode" (outside the byte range of real opcodes).
+	/// </summary>
+	public const int KNoOpcode = 0x100;
 	private static readonly byte[] DefaultInst1 = {
 		R, // opcode 0
 		A, A, A, A, A, A, A, A, A, A, A, A, A, A, A, A, A, A, // opcodes 1-18
@@ -165,62 +164,97 @@ internal class CodeTable : IDisposable
 		1, 1, 1, 1, 1, 1, 1, 1, 1 // opcodes 247-255
 	};
 
-	public static CodeTable DefaultTable = new();
+	// Serialized layout (RFC 3284 section 7 / open-vcdiff VCDiffCodeTableData):
+	// inst1[256], inst2[256], size1[256], size2[256], mode1[256], mode2[256].
+	private const int Inst1Offset = 0;
+	private const int Inst2Offset = KCodeTableSize;
+	private const int Size1Offset = KCodeTableSize * 2;
+	private const int Size2Offset = KCodeTableSize * 3;
+	private const int Mode1Offset = KCodeTableSize * 4;
+	private const int Mode2Offset = KCodeTableSize * 5;
+	public const int SerializedSize = KCodeTableSize * 6;
 
-	public NativeAllocation<byte> Inst1;
-	public NativeAllocation<byte> Inst2;
-	public NativeAllocation<byte> Mode1;
-	public NativeAllocation<byte> Mode2;
-	public NativeAllocation<byte> Size1;
-	public NativeAllocation<byte> Size2;
+	/// <summary>
+	///     The RFC 3284 default code table serialized as 1536 bytes. Also the dictionary a custom code table is
+	///     delta-encoded against.
+	/// </summary>
+	private static readonly byte[] DefaultSerialized = BuildDefault();
 
-	public byte[] Table = new byte[KCodeTableSize * 6];
+	/// <summary>
+	///     The shared, immutable default code table.
+	/// </summary>
+	public static readonly CodeTable DefaultTable = new(DefaultSerialized);
 
-	public CodeTable()
+	// single storage for all six rows; never mutated after construction
+	private readonly byte[] table;
+
+	private CodeTable(byte[] table)
 	{
-		this.InitTableSegment(0, DefaultInst1, ref this.Inst1);
-		this.InitTableSegment(1, DefaultInst2, ref this.Inst2);
-
-		this.InitTableSegment(2, DefaultSize1, ref this.Size1);
-		this.InitTableSegment(3, DefaultSize2, ref this.Size2);
-
-		this.InitTableSegment(4, DefaultMode1, ref this.Mode1);
-		this.InitTableSegment(5, DefaultMode2, ref this.Mode2);
+		this.table = table;
 	}
 
-	~CodeTable()
+	public ReadOnlySpan<byte> Inst1 => new(this.table, Inst1Offset, KCodeTableSize);
+	public ReadOnlySpan<byte> Inst2 => new(this.table, Inst2Offset, KCodeTableSize);
+	public ReadOnlySpan<byte> Size1 => new(this.table, Size1Offset, KCodeTableSize);
+	public ReadOnlySpan<byte> Size2 => new(this.table, Size2Offset, KCodeTableSize);
+	public ReadOnlySpan<byte> Mode1 => new(this.table, Mode1Offset, KCodeTableSize);
+	public ReadOnlySpan<byte> Mode2 => new(this.table, Mode2Offset, KCodeTableSize);
+
+	/// <summary>
+	///     The serialized default code table (read-only view), used as the dictionary when decoding a custom code table.
+	/// </summary>
+	public static ReadOnlyMemory<byte> DefaultBytes => DefaultSerialized;
+
+	private static byte[] BuildDefault()
 	{
-		this.Dispose();
+		var bytes = new byte[SerializedSize];
+		DefaultInst1.CopyTo(bytes, Inst1Offset);
+		DefaultInst2.CopyTo(bytes, Inst2Offset);
+		DefaultSize1.CopyTo(bytes, Size1Offset);
+		DefaultSize2.CopyTo(bytes, Size2Offset);
+		DefaultMode1.CopyTo(bytes, Mode1Offset);
+		DefaultMode2.CopyTo(bytes, Mode2Offset);
+		return bytes;
 	}
 
-	private void InitTableSegment(int row, byte[] defaultBytes, ref NativeAllocation<byte> alloc)
+	/// <summary>
+	///     Creates a code table from its 1536-byte serialization. Fails when the length is wrong or an entry holds an
+	///     instruction type outside NOOP/ADD/RUN/COPY.
+	/// </summary>
+	public static bool TryCreate(ReadOnlySpan<byte> serialized, out CodeTable? codeTable)
 	{
-		var rowSpan = this.Table.AsSpan(row * KCodeTableSize, KCodeTableSize);
-		alloc = new NativeAllocation<byte>(rowSpan.Length);
-		defaultBytes.CopyTo(alloc.AsSpan());
-	}
+		codeTable = null;
+		if (serialized.Length != SerializedSize) return false;
 
-	public bool SetBytes(byte[] items)
-	{
-		if (items.Length != KCodeTableSize * 6) return false;
+		var bytes = serialized.ToArray();
+		if (!AreInstructionTypesValid(bytes)) return false;
 
-		items.CopyTo(this.Table, 0);
+		codeTable = new CodeTable(bytes);
 		return true;
 	}
 
-	public ByteBuffer GetBytes()
+	private static bool AreInstructionTypesValid(byte[] bytes)
 	{
-		return new ByteBuffer(this.Table);
+		for (var i = Inst1Offset; i < Inst2Offset + KCodeTableSize; i++)
+		{
+			if (bytes[i] > C) return false;
+		}
+
+		return true;
 	}
 
-	public void Dispose()
+	/// <summary>
+	///     Checks every COPY entry uses an address mode that exists for the given address cache sizes.
+	/// </summary>
+	public bool AreModesValid(byte nearSize, byte sameSize)
 	{
-		this.Inst1.Dispose();
-		this.Inst2.Dispose();
-		this.Size1.Dispose();
-		this.Size2.Dispose();
-		this.Mode1.Dispose();
-		this.Mode2.Dispose();
-		GC.SuppressFinalize(this);
+		var lastMode = (int)VcDiffModes.FIRST + nearSize + sameSize - 1;
+		for (var opcode = 0; opcode < KCodeTableSize; opcode++)
+		{
+			if (this.table[Inst1Offset + opcode] == C && this.table[Mode1Offset + opcode] > lastMode) return false;
+			if (this.table[Inst2Offset + opcode] == C && this.table[Mode2Offset + opcode] > lastMode) return false;
+		}
+
+		return true;
 	}
 }

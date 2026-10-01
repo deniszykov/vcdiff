@@ -5,59 +5,32 @@ using System;
 
 namespace VCDiff.Compression.Xz;
 
-public static class Crc64
+/// <summary>
+///     CRC-64 (ECMA-182, reflected polynomial 0xC96C5795D7870F42) as used by the XZ CRC64 block check.
+/// </summary>
+internal static class Crc64
 {
-	public const ulong DEFAULT_SEED = 0x0;
-
-	public const ulong ISO3309_POLYNOMIAL = 0xD800000000000000;
+	public const ulong XZ_SEED = 0xffffffffffffffff;
 	private const ulong XZ_POLYNOMIAL = 0xC96C5795D7870F42;
-	internal const ulong XZ_SEED = 0xffffffffffffffff;
-	private static ulong[]? XzTable;
 
-	internal static ulong[]? Table;
+	private static readonly ulong[] XzTable = CreateTable(XZ_POLYNOMIAL);
 
-	public static ulong Compute(byte[] buffer)
-	{
-		return Compute(DEFAULT_SEED, buffer);
-	}
-
-	public static ulong Compute(ulong seed, byte[] buffer)
-	{
-		Table ??= CreateTable(ISO3309_POLYNOMIAL);
-
-		return CalculateHash(seed, Table, buffer);
-	}
-
-	public static ulong ComputeXz(byte[] buffer)
-	{
-		return ~UpdateXz(XZ_SEED, buffer);
-	}
-
+	/// <summary>
+	///     Feeds <paramref name="buffer" /> into a running (non-finalized) CRC state; start from <see cref="XZ_SEED" />
+	///     and complement the final value.
+	/// </summary>
 	public static ulong UpdateXz(ulong seed, ReadOnlySpan<byte> buffer)
 	{
-		XzTable ??= CreateTable(XZ_POLYNOMIAL);
-
-		return CalculateHash(seed, XzTable, buffer);
-	}
-
-	public static ulong CalculateHash(ulong seed, ulong[] table, ReadOnlySpan<byte> buffer)
-	{
+		var table = XzTable;
 		var crc = seed;
-		var len = buffer.Length;
-		for (var i = 0; i < len; i++)
-		{
-			unchecked
-			{
-				crc = (crc >> 8) ^ table[(buffer[i] ^ crc) & 0xff];
-			}
-		}
+		foreach (var b in buffer) crc = (crc >> 8) ^ table[(b ^ crc) & 0xff];
 
 		return crc;
 	}
 
-	public static ulong[] CreateTable(ulong polynomial)
+	private static ulong[] CreateTable(ulong polynomial)
 	{
-		var createTable = new ulong[256];
+		var table = new ulong[256];
 		for (var i = 0; i < 256; ++i)
 		{
 			var entry = (ulong)i;
@@ -69,9 +42,9 @@ public static class Crc64
 					entry >>= 1;
 			}
 
-			createTable[i] = entry;
+			table[i] = entry;
 		}
 
-		return createTable;
+		return table;
 	}
 }

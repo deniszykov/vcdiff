@@ -9,7 +9,7 @@ This is a hard fork of [VCDiff](https://github.com/Metric/VCDiff), originally wr
 
 Large chunks have been rewritten, and heavily optimized to be *extremely fast*, using vector intrinsics, as well as `Memory<byte>` and `Span<byte>` APIs as well as a sprinkling of unsafe pointer access to eke out every bit of performance possible. Non-scientific preliminary testing shows up to a 30x to 50x speedup compared to the original library when diffing a 2MB file. 
 
-Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been included. Testing was done with xdelta 3.1, support for xdelta 3.0 patch files has not been tested. Only patch files without external compression (`-S none`) are supported. 
+Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been included. Testing was done with xdelta 3.1, support for xdelta 3.0 patch files has not been tested. xdelta3 patches without secondary compression (`-S none`) and, for decoding only, with LZMA secondary compression (`-S lzma`) are supported; the `djw` and `fgk` secondary compressors and external compression are not.
 
 |Format|Encoding|Decoding|
 |------|--------|--------|
@@ -18,7 +18,8 @@ Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been 
 |SDHC Interleaved (with and without Adler32 Checksum)|✔️|✔️|
 |xdelta3 with Adler32 Checksum (without compression)|✔️|✔️|
 |xdelta3 with Adler32 Checksum and `VCD_APPHEADER` (without compression)|❌|✔️|
-|xdelta3 with external compression|❌|❌|
+|xdelta3 with LZMA secondary compression (`-S lzma`)|❌|✔️|
+|xdelta3 with `djw`/`fgk` secondary compression or external compression|❌|❌|
 
 Wherever possible, SSE3 or AVX2 extensions are used on supported systems. Speeds are comparable, albeit slightly slower than the native xdelta3, depending on the chosen blocksize. A lot of work has gone into optimizing out the overhead of garbage collection and memory access through `Memory<T>`, as well as parallelizing computational work with SIMD extensions.
 
@@ -98,7 +99,7 @@ using (var target = File.OpenRead("fileB.bin"))
 using (var delta  = File.Create("diff.bin"))
 {
     using var encoder = new VcEncoder(dict, target, delta);
-    if (encoder.Encode() != VCDiffResult.SUCCESS)
+    if (encoder.Encode() != VcDiffResult.SUCCESS)
         throw new InvalidOperationException("Encoding failed.");
 }
 
@@ -108,7 +109,7 @@ using (var delta  = File.OpenRead("diff.bin"))
 using (var target = File.Create("fileB.decoded.bin"))
 {
     using var decoder = new VcDecoder(dict, delta, target);
-    if (decoder.Decode(out _) != VCDiffResult.SUCCESS)
+    if (decoder.Decode(out _) != VcDiffResult.SUCCESS)
         throw new InvalidOperationException("Decoding failed.");
 }
 ```
@@ -223,7 +224,7 @@ Vector intrinsics and the `Span<T>` and `Memory<T>` memory APIs require .netstan
 The dictionary must be a file or data that is already in memory. The file must be fully read in first in order to encode properly. This is just how the algorithm works for VCDiff. The encode function is blocking.
 
 ```csharp
-using VCDiff.Include;
+using VCDiff.Includes;
 using VCDiff.Encoders;
 using VCDiff.Shared;
 
@@ -232,8 +233,8 @@ void DoEncode() {
     using(FileStream dict = new FileStream("..dictionary / old file path", FileMode.Open, FileAccess.Read))
     using(FileStream target = new FileStream("..target data / new data path", FileMode.Open, FileAccess.Read)) {
         VcEncoder coder = new VcEncoder(dict, target, output);
-        VCDiffResult result = coder.Encode(); //encodes with no checksum and not interleaved
-        if(result != VCDiffResult.SUCCESS) {
+        VcDiffResult result = coder.Encode(); //encodes with no checksum and not interleaved
+        if(result != VcDiffResult.SUCCESS) {
             //error was not able to encode properly
         }
     }
@@ -244,9 +245,10 @@ void DoEncode() {
 Encoding with checksum or interleaved or both
 
 ```csharp
-encoder.Encode(interleaved: true, checksum: false);
-encoder.Encode(interleaved: true, checksum: true);
-encoder.Encode(interleaved: false, checksum: true);
+encoder.Encode(interleaved: true, checksumFormat: ChecksumFormat.None);
+encoder.Encode(interleaved: true, checksumFormat: ChecksumFormat.SDCH);
+encoder.Encode(interleaved: false, checksumFormat: ChecksumFormat.SDCH);
+encoder.Encode(interleaved: false, checksumFormat: ChecksumFormat.Xdelta3); // xdelta3 checksums can not be interleaved
 ```
 
 Modifying the default chunk size for windows
@@ -254,7 +256,7 @@ Modifying the default chunk size for windows
 ```csharp
 int windowSize = 2; //in Megabytes. The default is 1MB window chunks.
 
-VcEnoder coder = new VcEncoder(dict, target, output, windowSize)
+VcEncoder coder = new VcEncoder(dict, target, output, windowSize);
 ```
 
 Modifying the default minimum copy encode size. Which means the match must be >= MinBlockSize in order to qualify as match for copying from dictionary file.
@@ -262,7 +264,7 @@ Modifying the default minimum copy encode size. Which means the match must be >=
 ```csharp
 // chunkSize is the minimum copy encode size.
 // Default is 32 bytes. Lowering this can improve the delta compression for small files. 
-// It must be a power of 2. 
+// It must be at least twice the block size.
 VcEncoder coder = new VcEncoder(dict, target, output, blockSize: 8, chunkSize: 16);
 ```
 
@@ -279,7 +281,7 @@ The dictionary must be a file or data that is already in memory. The file must b
 Due note the interleaved version of a delta file is meant for streaming and it is supported by the decoder already. However, non-interleaved expects access for reading the full delta file at one time. The delta file is still streamed, but must be able to read fully in sequential order.
 
 ```csharp
-using VCDiff.Include;
+using VCDiff.Includes;
 using VCDiff.Decoders;
 using VCDiff.Shared;
 
@@ -291,9 +293,9 @@ void DoDecode() {
 
         // The header of the delta file must be available before the first call to decoder.Decode().
         long bytesWritten = 0;
-        VCDiffResult result = decoder.Decode(out bytesWritten);
+        VcDiffResult result = decoder.Decode(out bytesWritten);
 
-        if(result != VCDiffResult.SUCCESS) {
+        if(result != VcDiffResult.SUCCESS) {
             //error decoding
         }
 
@@ -302,31 +304,7 @@ void DoDecode() {
 }
 ```
 
-Handling streaming of the interleaved format has the same setup. But instead you will continue calling decode until you know you have received everything. So, you will need to keep track of that. Everytime you loop through make sure you have enough data in the buffer to at least be able to decode the next VCDiff Window Header (which can be up to 22 bytes or so). After that the decode function will handle the waiting for the next part of the interleaved data for that VCDiff Window. The decode function is blocking.
-
-```csharp
-while (bytesWritten < someSizeThatYouAreExpecting) {
-    // make sure we have enough data in buffer to at least try and decode the next window section
-    // otherwise we will probably receive an error.
-    if(myStream.Length < 22) continue; 
-
-    long thisChunk = 0;
-    VCDiffResult result = decoder.Decode(out thisChunk);
-
-    bytesWritten += thisChunk;
-
-    if (result == VCDiffResult.ERROR) {
-        // it failed to decode something
-        // could be an issue that the window failed to parse
-        // or actual data failed to decode properly
-        break;
-    }
-
-    // otherwise continue on if you get SUCCESS or EOD (End of Data);
-    // because only you know when you will have the data finished loading
-    // the decoder doesn't care if nothing is available and it will keep trying until more is
-}
-```
+`VcDecoder` decodes the whole delta stream in one `Decode` call (a further call returns `VcDiffResult.EOD`). To decode a delta as it arrives, for example an interleaved delta received over the network, use the streaming `VcDiffDecoder` shown above: it accepts the delta in chunks of any size and emits target bytes as soon as they are decoded.
 
 </p>
 </details>

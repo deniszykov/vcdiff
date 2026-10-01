@@ -7,7 +7,11 @@ using VCDiff.Shared;
 
 namespace VCDiff.Encoders;
 
-internal class InstructionMap
+/// <summary>
+///     Maps (instruction, size, mode) to the opcodes of the default code table, for single instructions and for the
+///     second half of compound opcodes.
+/// </summary>
+internal sealed class InstructionMap
 {
 	private readonly struct OpcodeMap2
 	{
@@ -29,20 +33,20 @@ internal class InstructionMap
 			if (instmode == null)
 			{
 				instmode = new int[this.numInstAndModes][];
-				this.opcodes2[opcode] = instmode;
+				this.opcodes2[first] = instmode;
 			}
 
 			var sizeArray = instmode[inst + mode];
 			if (sizeArray == null)
 			{
-				sizeArray = this.NewSizeOpcodeArray(this.maxSize + 1);
+				sizeArray = NewSizeOpcodeArray(this.maxSize + 1);
 				instmode[inst + mode] = sizeArray;
 			}
 
 			if (sizeArray[size] == CodeTable.KNoOpcode) sizeArray[size] = opcode;
 		}
 
-		private int[] NewSizeOpcodeArray(int size)
+		private static int[] NewSizeOpcodeArray(int size)
 		{
 			var nn = new int[size];
 			new Span<int>(nn).Fill(CodeTable.KNoOpcode);
@@ -90,44 +94,39 @@ internal class InstructionMap
 		}
 	}
 
-	public static InstructionMap Instance = new();
+	public static readonly InstructionMap Instance = new();
 
-	private readonly CodeTable table;
-	private OpcodeMap firstMap;
-	private OpcodeMap2 secondMap;
+	private readonly OpcodeMap firstMap;
+	private readonly OpcodeMap2 secondMap;
 
-    /// <summary>
-    ///     Instruction mapping for op codes and such for using in encoding
-    /// </summary>
-    public unsafe InstructionMap()
+	private InstructionMap()
 	{
-		this.table = CodeTable.DefaultTable;
-		var inst2 = this.table.Inst2;
-		var inst1 = this.table.Inst1;
-		var size2 = this.table.Size2;
-		var size1 = this.table.Size1;
-		var mode1 = this.table.Mode1;
-		var mode2 = this.table.Mode2;
+		var table = CodeTable.DefaultTable;
+		var inst2 = table.Inst2;
+		var inst1 = table.Inst1;
+		var size2 = table.Size2;
+		var size1 = table.Size1;
+		var mode1 = table.Mode1;
+		var mode2 = table.Mode2;
 
-		// max sizes are known for the default code table (18 and 6 respectively).
-		this.firstMap = new OpcodeMap((int)VcDiffInstructionType.LAST + AddressCache.DefaultLast + 1, FindMaxSize(size1.AsSpan(), 18));
-		this.secondMap = new OpcodeMap2((int)VcDiffInstructionType.LAST + AddressCache.DefaultLast + 1, FindMaxSize(size2.AsSpan(), 6));
+		this.firstMap = new OpcodeMap((int)VcDiffInstructionType.LAST + AddressCache.DEFAULT_LAST + 1, MaxSize(size1));
+		this.secondMap = new OpcodeMap2((int)VcDiffInstructionType.LAST + AddressCache.DEFAULT_LAST + 1, MaxSize(size2));
 
 		for (var opcode = 0; opcode < CodeTable.KCodeTableSize; ++opcode)
 		{
-			if (inst2.Pointer[opcode] == CodeTable.N)
-				this.firstMap.Add(inst1.Pointer[opcode], size1.Pointer[opcode], mode1.Pointer[opcode], (byte)opcode);
-			else if (inst1.Pointer[opcode] == CodeTable.N) this.firstMap.Add(inst1.Pointer[opcode], size1.Pointer[opcode], mode1.Pointer[opcode], (byte)opcode);
+			if (inst2[opcode] == CodeTable.N)
+				this.firstMap.Add(inst1[opcode], size1[opcode], mode1[opcode], (byte)opcode);
+			else if (inst1[opcode] == CodeTable.N) this.firstMap.Add(inst2[opcode], size2[opcode], mode2[opcode], (byte)opcode);
 		}
 
 		for (var opcode = 0; opcode < CodeTable.KCodeTableSize; ++opcode)
 		{
-			if (inst1.Pointer[opcode] != CodeTable.N && inst2.Pointer[opcode] != CodeTable.N)
+			if (inst1[opcode] != CodeTable.N && inst2[opcode] != CodeTable.N)
 			{
-				var found = this.LookFirstOpcode(inst1.Pointer[opcode], size1.Pointer[opcode], mode1.Pointer[opcode]);
+				var found = this.LookFirstOpcode(inst1[opcode], size1[opcode], mode1[opcode]);
 				if (found == CodeTable.KNoOpcode) continue;
 
-				this.secondMap.Add((byte)found, inst2.Pointer[opcode], size2.Pointer[opcode], mode2.Pointer[opcode], (byte)opcode);
+				this.secondMap.Add((byte)found, inst2[opcode], size2[opcode], mode2[opcode], (byte)opcode);
 			}
 		}
 	}
@@ -142,15 +141,15 @@ internal class InstructionMap
 		return this.secondMap.LookUp(first, inst, size, mode);
 	}
 
-	private static byte FindMaxSize(ReadOnlySpan<byte> sizes, sbyte knownMaxSize = -1)
+	private static byte MaxSize(ReadOnlySpan<byte> sizes)
 	{
-		if (knownMaxSize > -1) return (byte)knownMaxSize;
+		byte maxSize = 0;
+		foreach (var size in sizes)
+		{
+			if (maxSize < size)
+				maxSize = size;
+		}
 
-		var maxSize = sizes[0];
-		var len = sizes.Length;
-		for (var i = 1; i < len; i++)
-			if (maxSize < sizes[i])
-				maxSize = sizes[i];
 		return maxSize;
 	}
 }

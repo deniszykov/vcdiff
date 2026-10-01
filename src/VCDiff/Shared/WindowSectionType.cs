@@ -3,9 +3,8 @@
 
 namespace VCDiff.Shared;
 
-public enum WindowSectionType
+internal enum WindowSectionType
 {
-	Unspecified = 0,
 	AddRunData,
 	InstructionsAndSizes,
 	AddressForCopy

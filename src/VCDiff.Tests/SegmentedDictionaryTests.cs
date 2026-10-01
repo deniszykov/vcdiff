@@ -345,15 +345,16 @@ public class SegmentedDictionaryTests
 	}
 
 	[Fact]
-	public void LegacyEncoder_ByteBufferDictionary_MatchesStreamDictionary()
+	public void LegacyEncoder_InPlaceDictionary_MatchesCopiedDictionary()
 	{
 		var dict = MakeDictionary(300_000, 41);
 		var target = MakeTarget(dict, 400_000, 42);
 
-		using var buffer = new ByteBuffer(dict);
+		// A read-only MemoryStream is referenced in place, a writable one (LegacyEncode) is copied.
+		using var source = new MemoryStream(dict, false);
 		using var tgt = new MemoryStream(target);
 		using var delta = new MemoryStream();
-		using (var enc = new VcEncoder(buffer, tgt, delta))
+		using (var enc = new VcEncoder(source, tgt, delta))
 			Assert.Equal(VcDiffResult.SUCCESS, enc.Encode());
 
 		Assert.Equal(LegacyEncode(dict, target, false, ChecksumFormat.None, 16), delta.ToArray());

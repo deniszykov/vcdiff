@@ -27,24 +27,20 @@ namespace VCDiff.Encoders;
 /// </remarks>
 public sealed class VcDiffEncoder : IDisposable
 {
-	private static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4, 0x00, 0x00 };
-	private static readonly byte[] MagicBytesExtended = { 0xD6, 0xC3, 0xC4, (byte)'S', 0x00 };
 	private readonly ChunkEncoder _chunker;
-
-	private readonly DictionarySource _dictionary;
-	private readonly RollingHash _hasher;
-	private readonly bool _ownsHasher;
-
 	private readonly RecyclableMemoryStream _pending;
 	private readonly ArrayPool<byte> _pool;
+	private readonly EncoderSession _session;
 
-	private readonly byte[] _targetWindow;
 	private readonly int _windowSize;
 	private bool _disposed;
 
 	private bool _finished;
 	private long _pendingReadOffset;
 	private int _targetLength;
+
+	// Rented on first use: callers that hand over whole windows at once never need it.
+	private byte[]? _targetWindow;
 
     /// <summary>
     ///     Creates a streaming VCDIFF encoder.
@@ -61,45 +57,22 @@ public sealed class VcDiffEncoder : IDisposable
 
 		var interleaved = options.Interleaved;
 		var checksumFormat = options.ChecksumFormat;
-		if (interleaved && checksumFormat == ChecksumFormat.Xdelta3)
-			throw new ArgumentException("Interleaved diffs can not have an xdelta3 checksum!");
+		EncoderSession.ValidateFormat(interleaved, checksumFormat);
 
-		var maxWindowSize = options.MaxBufferSize;
-		if (maxWindowSize <= 0)
-			maxWindowSize = 1;
-		this._windowSize = maxWindowSize * 1024 * 1024;
-
-		var blockSize = options.BlockSize;
-		var chunkSize = options.ChunkSize < 2 ? blockSize * 2 : options.ChunkSize;
-		if (blockSize % 2 != 0 || chunkSize < 2 || chunkSize < 2 * blockSize)
-			throw new ArgumentException($"{blockSize} can not be less than 2 or twice the blocksize of the dictionary {blockSize}.");
-
-		var rollingHash = options.RollingHash;
-		if (rollingHash == null)
+		this._session = new EncoderSession(new DictionarySource(dictionary), options);
+		try
 		{
-			this._hasher = new RollingHash(blockSize);
-			this._ownsHasher = true;
+			this._windowSize = this._session.WindowSize;
+			this._chunker = this._session.CreateChunkEncoder(interleaved, checksumFormat);
+			this._pending = options.MemoryStreamManagerOrDefault.GetStream(nameof(VcDiffEncoder));
+			this._pending.Write(EncoderSession.GetFileHeader(interleaved, checksumFormat).Span);
 		}
-		else
+		catch
 		{
-			this._hasher = rollingHash;
-			this._ownsHasher = false;
+			this._chunker?.Dispose();
+			this._session.Dispose();
+			throw;
 		}
-
-		if (this._hasher.WindowSize != blockSize)
-			throw new ArgumentException("Supplied RollingHash instance has a different window size than blocksize!");
-
-		this._dictionary = new DictionarySource(dictionary);
-		var blockHash = new BlockHash(this._dictionary, this._hasher, blockSize);
-		blockHash.AddAllBlocks();
-
-		this._chunker = new ChunkEncoder(blockHash, this._dictionary.Length, this._hasher, checksumFormat, interleaved, chunkSize);
-
-		this._targetWindow = this._pool.Rent(this._windowSize);
-		this._pending = Pool.MemoryStreamManager.GetStream(nameof(VcDiffEncoder));
-
-		var magic = !interleaved && checksumFormat != ChecksumFormat.SDCH ? MagicBytes : MagicBytesExtended;
-		this._pending.Write(magic.AsSpan());
 	}
 
     /// <summary>
@@ -130,15 +103,37 @@ public sealed class VcDiffEncoder : IDisposable
 		// Accumulate target input into the current window.
 		while (inputConsumed < input.Length)
 		{
+			var available = input.Length - inputConsumed;
+
+			// A whole window (or the final, shorter one) that is already contiguous in the caller's
+			// span is encoded in place, without staging it in the window buffer.
+			if (this._targetLength == 0 && (available >= this._windowSize || isFinal))
+			{
+				var length = Math.Min(available, this._windowSize);
+				this.EncodeWindow(input.Slice(inputConsumed, length));
+				inputConsumed += length;
+
+				outputWritten += this.DrainPending(output.Slice(outputWritten));
+				if (this._pendingReadOffset < this._pending.Length)
+					return OperationStatus.DestinationTooSmall;
+
+				if (length == this._windowSize)
+					return OperationStatus.Done;
+
+				this._finished = true;
+				return OperationStatus.Done;
+			}
+
+			this._targetWindow ??= this._pool.Rent(this._windowSize);
 			var space = this._windowSize - this._targetLength;
-			var take = Math.Min(input.Length - inputConsumed, space);
+			var take = Math.Min(available, space);
 			input.Slice(inputConsumed, take).CopyTo(this._targetWindow.AsSpan(this._targetLength, take));
 			this._targetLength += take;
 			inputConsumed += take;
 
 			if (this._targetLength == this._windowSize)
 			{
-				this.EncodeWindow();
+				this.EncodeBufferedWindow();
 				outputWritten += this.DrainPending(output.Slice(outputWritten));
 				if (this._pendingReadOffset < this._pending.Length)
 					return OperationStatus.DestinationTooSmall;
@@ -151,7 +146,7 @@ public sealed class VcDiffEncoder : IDisposable
 		{
 			if (this._targetLength > 0)
 			{
-				this.EncodeWindow();
+				this.EncodeBufferedWindow();
 				outputWritten += this.DrainPending(output.Slice(outputWritten));
 				if (this._pendingReadOffset < this._pending.Length)
 					return OperationStatus.DestinationTooSmall;
@@ -164,12 +159,16 @@ public sealed class VcDiffEncoder : IDisposable
 		return OperationStatus.NeedMoreData;
 	}
 
-	private void EncodeWindow()
+	private void EncodeBufferedWindow()
 	{
-		using var target = new ByteBuffer(new Memory<byte>(this._targetWindow, 0, this._targetLength));
-		this._pending.Position = this._pending.Length;
-		this._chunker.EncodeChunk(target, this._pending);
+		this.EncodeWindow(this._targetWindow.AsSpan(0, this._targetLength));
 		this._targetLength = 0;
+	}
+
+	private void EncodeWindow(ReadOnlySpan<byte> window)
+	{
+		this._pending.Position = this._pending.Length;
+		this._chunker.EncodeChunk(window, this._pending);
 	}
 
 	private int DrainPending(Span<byte> output)
@@ -178,19 +177,21 @@ public sealed class VcDiffEncoder : IDisposable
 		if (available <= 0)
 			return 0;
 
+		// Read through the stream: it locates the block by offset, so draining into tiny output spans
+		// stays linear and does not rebuild a segment list on every call.
 		var toCopy = (int)Math.Min(available, output.Length);
-		if (toCopy > 0)
+		var copied = 0;
+		this._pending.Position = this._pendingReadOffset;
+		while (copied < toCopy)
 		{
-			var sequence = this._pending.GetReadOnlySequence().Slice(this._pendingReadOffset, toCopy);
-			var offset = 0;
-			foreach (var segment in sequence)
-			{
-				segment.Span.CopyTo(output.Slice(offset));
-				offset += segment.Span.Length;
-			}
+			var read = this._pending.Read(output.Slice(copied, toCopy - copied));
+			if (read <= 0)
+				break;
+
+			copied += read;
 		}
 
-		this._pendingReadOffset += toCopy;
+		this._pendingReadOffset += copied;
 		if (this._pendingReadOffset == this._pending.Length)
 		{
 			this._pending.SetLength(0);
@@ -198,7 +199,7 @@ public sealed class VcDiffEncoder : IDisposable
 			this._pendingReadOffset = 0;
 		}
 
-		return toCopy;
+		return copied;
 	}
 
 	/// <inheritdoc />
@@ -209,9 +210,12 @@ public sealed class VcDiffEncoder : IDisposable
 
 		this._disposed = true;
 		this._chunker.Dispose();
-		this._dictionary.Dispose();
-		if (this._ownsHasher) this._hasher.Dispose();
+		this._session.Dispose();
 		this._pending.Dispose();
-		this._pool.Return(this._targetWindow, false);
+		if (this._targetWindow != null)
+		{
+			this._pool.Return(this._targetWindow, false);
+			this._targetWindow = null;
+		}
 	}
 }

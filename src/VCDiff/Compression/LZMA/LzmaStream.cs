@@ -3,38 +3,30 @@
 
 using System;
 using System.Buffers;
-using System.Buffers.Binary;
 using System.IO;
 using VCDiff.Compression.LZMA.LZ;
+using VCDiff.Compression.LZMA.RangeCoder;
 
 namespace VCDiff.Compression.LZMA;
 
 /// <summary>
-///     Minimal decode-only LZMA / LZMA2 stream, adapted from SharpCompress for use by the
-///     vendored XZ decoder. Encoding support has been removed.
+///     Minimal decode-only LZMA2 stream, adapted from SharpCompress for use by the vendored XZ decoder. Encoding and
+///     raw LZMA1 support have been removed. The input stream is never owned.
 /// </summary>
-internal class LzmaStream : Stream
+internal sealed class LzmaStream : Stream
 {
 	private readonly int _dictionarySize;
-	private readonly long _inputSize;
-	private readonly Stream? _inputStream;
-
-	// LZMA2
-	private readonly bool _isLzma2;
-	private readonly bool _leaveOpen;
-	private readonly long _outputSize;
+	private readonly Stream _inputStream;
 	private readonly OutWindow _outWindow;
-	private readonly RangeCoder.Decoder _rangeDecoder;
+	private readonly RangeDecoder _rangeDecoder;
 	private long _availableBytes;
-	private Decoder? _decoder;
+	private LzmaDecoder? _decoder;
 	private bool _endReached;
-	private long _inputPosition;
-
 	private bool _isDisposed;
 	private bool _needDictReset = true;
 	private bool _needProps = true;
-
 	private long _position;
+	private byte _properties;
 	private long _rangeDecoderLimit;
 	private bool _uncompressedChunk;
 
@@ -48,133 +40,19 @@ internal class LzmaStream : Stream
 
 	public override long Position { get => this._position; set => throw new NotSupportedException(); }
 
-	public byte[] Properties { get; } = new byte[5];
-
-	private LzmaStream
-	(
-		byte[] properties,
-		Stream inputStream,
-		long inputSize,
-		long outputSize,
-		bool isLzma2,
-		bool leaveOpen = false,
-		ArrayPool<byte>? bytePool = null
-	)
+	/// <param name="dictionarySizeProperty">Encoded LZMA2 dictionary size (the LZMA2 filter properties byte).</param>
+	/// <param name="inputStream">Compressed input; not disposed by this stream.</param>
+	/// <param name="bytePool">Pool for the dictionary window and the range-decoder input buffer.</param>
+	public LzmaStream(byte dictionarySizeProperty, Stream inputStream, ArrayPool<byte>? bytePool = null)
 	{
 		this._outWindow = new OutWindow(bytePool);
-		this._rangeDecoder = new RangeCoder.Decoder(bytePool);
+		this._rangeDecoder = new RangeDecoder(bytePool);
 		this._inputStream = inputStream;
-		this._inputSize = inputSize;
-		this._outputSize = outputSize;
-		this._isLzma2 = isLzma2;
-		this._leaveOpen = leaveOpen;
-		if (!isLzma2)
-		{
-			this._dictionarySize = BinaryPrimitives.ReadInt32LittleEndian(properties.AsSpan(1));
-			this._outWindow.Create(this._dictionarySize);
 
-			this._decoder = new Decoder();
-			this._decoder.SetDecoderProperties(properties);
-			this.Properties = properties;
+		this._dictionarySize = 2 | (dictionarySizeProperty & 1);
+		this._dictionarySize <<= (dictionarySizeProperty >> 1) + 11;
 
-			this._availableBytes = outputSize < 0 ? long.MaxValue : outputSize;
-			this._rangeDecoderLimit = inputSize;
-		}
-		else
-		{
-			this._dictionarySize = 2 | (properties[0] & 1);
-			this._dictionarySize <<= (properties[0] >> 1) + 11;
-
-			this._outWindow.Create(this._dictionarySize);
-
-			this.Properties = new byte[1];
-			this._availableBytes = 0;
-		}
-	}
-
-	public static LzmaStream Create
-	(
-		byte[] properties,
-		Stream inputStream,
-		ArrayPool<byte>? bytePool = null,
-		bool leaveOpen = false
-	)
-	{
-		return Create(properties, inputStream, -1, -1, null, properties.Length < 5, leaveOpen, bytePool);
-	}
-
-	public static LzmaStream Create
-	(
-		byte[] properties,
-		Stream inputStream,
-		long inputSize,
-		bool leaveOpen = false,
-		ArrayPool<byte>? bytePool = null
-	)
-	{
-		return Create(properties, inputStream, inputSize, -1, null, properties.Length < 5, leaveOpen, bytePool);
-	}
-
-	public static LzmaStream Create
-	(
-		byte[] properties,
-		Stream inputStream,
-		long inputSize,
-		long outputSize,
-		bool leaveOpen = false,
-		ArrayPool<byte>? bytePool = null
-	)
-	{
-		return Create(
-			properties,
-			inputStream,
-			inputSize,
-			outputSize,
-			null,
-			properties.Length < 5,
-			leaveOpen,
-			bytePool
-		);
-	}
-
-	private static LzmaStream Create
-	(
-		byte[] properties,
-		Stream inputStream,
-		long inputSize,
-		long outputSize,
-		Stream? presetDictionary,
-		bool isLzma2,
-		bool leaveOpen = false,
-		ArrayPool<byte>? bytePool = null
-	)
-	{
-		var lzma = new LzmaStream(
-			properties,
-			inputStream,
-			inputSize,
-			outputSize,
-			isLzma2,
-			leaveOpen,
-			bytePool
-		);
-		if (!isLzma2)
-		{
-			if (presetDictionary != null) lzma._outWindow.Train(presetDictionary);
-
-			lzma._rangeDecoder.Init(inputStream);
-			lzma._rangeDecoder.SetFastLimit(lzma._rangeDecoderLimit);
-		}
-		else
-		{
-			if (presetDictionary != null)
-			{
-				lzma._outWindow.Train(presetDictionary);
-				lzma._needDictReset = false;
-			}
-		}
-
-		return lzma;
+		this._outWindow.Create(this._dictionarySize);
 	}
 
 	public override void Flush()
@@ -188,9 +66,8 @@ internal class LzmaStream : Stream
 		this._isDisposed = true;
 		if (disposing)
 		{
-			if (!this._leaveOpen) this._inputStream?.Dispose();
-
 			this._outWindow.Dispose();
+			this._rangeDecoder.ReleaseStream(); // returns the pooled input buffer if a chunk was abandoned mid-way
 		}
 
 		base.Dispose(disposing);
@@ -198,64 +75,34 @@ internal class LzmaStream : Stream
 
 	public override int Read(byte[] buffer, int offset, int count)
 	{
+		return this.Read(buffer.AsSpan(offset, count));
+	}
+
+	public override int Read(Span<byte> buffer)
+	{
 		if (this._endReached) return 0;
 
+		var count = buffer.Length;
 		var total = 0;
 		while (total < count)
 		{
 			if (this._availableBytes == 0)
 			{
-				if (this._isLzma2)
-					this.DecodeChunkHeader();
-				else
-					this._endReached = true;
+				this.DecodeChunkHeader();
 				if (this._endReached) break;
 			}
 
 			var toProcess = count - total;
 			if (toProcess > this._availableBytes) toProcess = (int)this._availableBytes;
 
-			this._outWindow.SetLimit(toProcess);
-			if (this._uncompressedChunk)
-				this._inputPosition += this._outWindow.CopyStream(this._inputStream!, toProcess);
-			else if (this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder)) this.HandleEndMarker();
+			this.Decode(toProcess);
 
-			var read = this._outWindow.Read(buffer, offset, toProcess);
+			var read = this._outWindow.Read(buffer.Slice(total, toProcess));
 			total += read;
-			offset += read;
 			this._position += read;
 			this._availableBytes -= read;
 
-			if (this._availableBytes == 0 && !this._uncompressedChunk)
-			{
-				if (this._isLzma2 && this._decoder!.HasEndMarker) throw new DataErrorException();
-
-				// Check range corruption scenario
-				if (
-					!this._rangeDecoder.IsFinished || (this._rangeDecoderLimit >= 0 && this._rangeDecoder.Total != this._rangeDecoderLimit)
-				)
-				{
-					// Stream might have End Of Stream marker
-					this._outWindow.SetLimit(toProcess + 1);
-					if (!this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
-					{
-						this._rangeDecoder.ReleaseStream();
-						throw new DataErrorException();
-					}
-				}
-
-				this._rangeDecoder.ReleaseStream();
-
-				this._inputPosition += this._rangeDecoder.Total;
-				if (this._outWindow.HasPending) throw new DataErrorException();
-			}
-		}
-
-		if (this._endReached)
-		{
-			if (this._inputSize >= 0 && this._inputPosition != this._inputSize) throw new DataErrorException();
-
-			if (this._outputSize >= 0 && this._position != this._outputSize) throw new DataErrorException();
+			if (this._availableBytes == 0) this.FinishChunk(toProcess);
 		}
 
 		return total;
@@ -267,65 +114,68 @@ internal class LzmaStream : Stream
 
 		if (this._availableBytes == 0)
 		{
-			if (this._isLzma2)
-				this.DecodeChunkHeader();
-			else
-				this._endReached = true;
+			this.DecodeChunkHeader();
+			if (this._endReached) return -1;
 		}
 
-		if (this._endReached)
-		{
-			if (this._inputSize >= 0 && this._inputPosition != this._inputSize) throw new DataErrorException();
-
-			if (this._outputSize >= 0 && this._position != this._outputSize) throw new DataErrorException();
-
-			return -1;
-		}
-
-		this._outWindow.SetLimit(1);
-		if (this._uncompressedChunk)
-			this._inputPosition += this._outWindow.CopyStream(this._inputStream!, 1);
-		else if (this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder)) this.HandleEndMarker();
+		this.Decode(1);
 
 		var value = this._outWindow.ReadByte();
 		this._position++;
 		this._availableBytes--;
 
-		if (this._availableBytes == 0 && !this._uncompressedChunk)
-		{
-			if (this._isLzma2 && this._decoder!.HasEndMarker) throw new DataErrorException();
-
-			// Check range corruption scenario
-			if (
-				!this._rangeDecoder.IsFinished || (this._rangeDecoderLimit >= 0 && this._rangeDecoder.Total != this._rangeDecoderLimit)
-			)
-			{
-				// Stream might have End Of Stream marker
-				this._outWindow.SetLimit(2);
-				if (!this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
-				{
-					this._rangeDecoder.ReleaseStream();
-					throw new DataErrorException();
-				}
-			}
-
-			this._rangeDecoder.ReleaseStream();
-
-			this._inputPosition += this._rangeDecoder.Total;
-			if (this._outWindow.HasPending) throw new DataErrorException();
-		}
+		if (this._availableBytes == 0) this.FinishChunk(1);
 
 		return value;
 	}
 
+	/// <summary>Decodes up to <paramref name="count" /> bytes of the current chunk into the window.</summary>
+	private void Decode(int count)
+	{
+		this._outWindow.SetLimit(count);
+		if (this._uncompressedChunk)
+			this._outWindow.CopyStream(this._inputStream, count);
+		else if (this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
+		{
+			// End-of-stream marker: not allowed inside LZMA2.
+			throw new InvalidFormatException("LZMA data error");
+		}
+	}
+
+	/// <summary>
+	///     Validates that a fully drained compressed chunk consumed exactly its declared compressed size.
+	/// </summary>
+	/// <param name="lastDecodeCount">The size of the last <see cref="Decode" /> request.</param>
+	private void FinishChunk(int lastDecodeCount)
+	{
+		if (this._uncompressedChunk) return;
+
+		if (this._decoder!.HasEndMarker) throw new InvalidFormatException("LZMA data error");
+
+		// Check range corruption scenario
+		if (!this._rangeDecoder.IsFinished || this._rangeDecoder.Total != this._rangeDecoderLimit)
+		{
+			// Stream might have End Of Stream marker
+			this._outWindow.SetLimit(lastDecodeCount + 1);
+			if (!this._decoder.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
+			{
+				this._rangeDecoder.ReleaseStream();
+				throw new InvalidFormatException("LZMA data error");
+			}
+		}
+
+		this._rangeDecoder.ReleaseStream();
+
+		if (this._outWindow.HasPending) throw new InvalidFormatException("LZMA data error");
+	}
+
 	private void DecodeChunkHeader()
 	{
-		var control = this._inputStream!.ReadByte();
-		this._inputPosition++;
+		var control = this._inputStream.ReadByteOrThrow();
 
 		if (control == 0x00)
 		{
-			if (this._isLzma2 && this._decoder is { HasEndMarker: true }) throw new DataErrorException();
+			if (this._decoder is { HasEndMarker: true }) throw new InvalidFormatException("LZMA data error");
 
 			this._endReached = true;
 			return;
@@ -337,54 +187,50 @@ internal class LzmaStream : Stream
 			this._needDictReset = false;
 			this._outWindow.Reset();
 		}
-		else if (this._needDictReset) throw new DataErrorException();
+		else if (this._needDictReset) throw new InvalidFormatException("LZMA data error");
 
 		if (control >= 0x80)
 		{
 			this._uncompressedChunk = false;
 
 			this._availableBytes = (control & 0x1F) << 16;
-			this._availableBytes += (this._inputStream.ReadByte() << 8) + this._inputStream.ReadByte() + 1;
-			this._inputPosition += 2;
+			this._availableBytes += this.ReadUInt16BigEndian() + 1;
 
-			this._rangeDecoderLimit = (this._inputStream.ReadByte() << 8) + this._inputStream.ReadByte() + 1;
-			this._inputPosition += 2;
+			this._rangeDecoderLimit = this.ReadUInt16BigEndian() + 1;
 
 			if (control >= 0xC0)
 			{
 				this._needProps = false;
-				this.Properties[0] = (byte)this._inputStream.ReadByte();
-				this._inputPosition++;
+				this._properties = this._inputStream.ReadByteOrThrow();
 
-				this._decoder = new Decoder();
-				this._decoder.SetDecoderProperties(this.Properties);
+				// State reset: SetDecoderProperties fully re-initialises every model, so the decoder (and its
+				// probability arrays) is reused instead of allocated per LZMA2 chunk.
+				this._decoder ??= new LzmaDecoder();
+				this._decoder.SetDecoderProperties(this._properties);
 			}
 			else if (this._needProps)
-				throw new DataErrorException();
+				throw new InvalidFormatException("LZMA data error");
 			else if (control >= 0xA0)
 			{
-				this._decoder = new Decoder();
-				this._decoder.SetDecoderProperties(this.Properties);
+				this._decoder ??= new LzmaDecoder();
+				this._decoder.SetDecoderProperties(this._properties);
 			}
 
-			this._rangeDecoder.Init(this._inputStream);
-			this._rangeDecoder.SetFastLimit(this._rangeDecoderLimit);
+			this._rangeDecoder.Init(this._inputStream, this._rangeDecoderLimit);
 		}
 		else if (control > 0x02)
-			throw new DataErrorException();
+			throw new InvalidFormatException("LZMA data error");
 		else
 		{
 			this._uncompressedChunk = true;
-			this._availableBytes = (this._inputStream.ReadByte() << 8) + this._inputStream.ReadByte() + 1;
-			this._inputPosition += 2;
+			this._availableBytes = this.ReadUInt16BigEndian() + 1;
 		}
 	}
 
-	private void HandleEndMarker()
+	private int ReadUInt16BigEndian()
 	{
-		if (this._isLzma2) throw new DataErrorException();
-
-		if (this._outputSize < 0) this._availableBytes = this._outWindow.AvailableBytes;
+		var high = this._inputStream.ReadByteOrThrow();
+		return (high << 8) | this._inputStream.ReadByteOrThrow();
 	}
 
 	public override long Seek(long offset, SeekOrigin origin)

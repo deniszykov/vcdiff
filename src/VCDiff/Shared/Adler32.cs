@@ -8,12 +8,12 @@ using System.Runtime.Intrinsics.X86;
 
 namespace VCDiff.Shared;
 
-internal class Adler32
+/// <summary>
+///     Zlib compatible Adler-32, vectorized with AVX2 / SSSE3 when available.
+/// </summary>
+internal static class Adler32
 {
-    /// <summary>
-    ///     Zlib implementation of the Adler32 Hash
-    /// </summary>
-    private const uint BASE = 65521;
+	private const uint BASE = 65521;
 
 	private const int BLOCK_SIZE = 1 << 5;
 
@@ -249,11 +249,15 @@ internal class Adler32
 		}
 	}
 
+	/// <summary>
+	///     Feeds <paramref name="buff" /> into the running Adler-32 value <paramref name="adler" />.
+	/// </summary>
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static uint Hash(uint adler, ReadOnlySpan<byte> buff)
 	{
 		var len = (uint)buff.Length;
-		if (len == 0) return 1;
+		// Like zlib's adler32(adler, buf, 0), hashing no data leaves the running value unchanged.
+		if (len == 0) return adler;
 
 		if (len == 1)
 		{
