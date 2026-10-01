@@ -7,7 +7,7 @@ namespace VCDiff.Compression.Xz;
 
 /// <summary>
 ///     Forward-only reader over an in-memory, CRC-verified XZ structure (block header). Running past the end means
-///     the header's declared fields do not fit its declared size, so it is reported as <see cref="InvalidFormatException" />.
+///     the header's declared fields do not fit its declared size, so it is reported as <see cref="VcdiffException" />.
 /// </summary>
 internal ref struct XzSpanReader
 {
@@ -23,14 +23,14 @@ internal ref struct XzSpanReader
 
 	public byte ReadByte()
 	{
-		if (this.Position >= this._buffer.Length) throw new InvalidFormatException("XZ block header truncated");
+		if (this.Position >= this._buffer.Length) throw VcdiffException.XzBlockHeaderTruncated();
 
 		return this._buffer[this.Position++];
 	}
 
 	public ReadOnlySpan<byte> ReadBytes(int count)
 	{
-		if (count < 0 || count > this._buffer.Length - this.Position) throw new InvalidFormatException("XZ block header truncated");
+		if (count < 0 || count > this._buffer.Length - this.Position) throw VcdiffException.XzBlockHeaderTruncated();
 
 		var result = this._buffer.Slice(this.Position, count);
 		this.Position += count;

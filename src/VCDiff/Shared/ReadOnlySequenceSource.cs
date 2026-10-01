@@ -45,7 +45,7 @@ public sealed unsafe class ReadOnlySequenceSource : IDictionaryReader
 	public ReadOnlySequenceSource(ReadOnlySequence<byte> sequence, Action? releaseSequence = null)
 	{
 		if (sequence.Length > int.MaxValue)
-			throw new ArgumentException("The dictionary can not be larger than 2 GiB.", nameof(sequence));
+			throw VcdiffException.DictionaryTooLarge();
 
 		this.sequence = sequence;
 		this.releaseSequence = releaseSequence;

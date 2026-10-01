@@ -19,13 +19,13 @@ internal sealed class Lzma2Filter : BlockFilter
 
 	protected override void Init(ReadOnlySpan<byte> properties)
 	{
-		if (properties.Length != 1) throw new InvalidFormatException("LZMA properties unexpected length");
+		if (properties.Length != 1) throw VcdiffException.LzmaPropertiesUnexpectedLength();
 
 		var reserved = properties[0] & 0xC0;
-		if (reserved != 0) throw new InvalidFormatException("Reserved bits used in LZMA properties");
+		if (reserved != 0) throw VcdiffException.ReservedBitsInLzmaProperties();
 
 		this._dictionarySizeProperty = (byte)(properties[0] & 0x3F);
-		if (this._dictionarySizeProperty > MAX_DICTIONARY_SIZE_PROPERTY) throw new InvalidFormatException("Dictionary size greater than UInt32.Max");
+		if (this._dictionarySizeProperty > MAX_DICTIONARY_SIZE_PROPERTY) throw VcdiffException.DictionarySizeGreaterThanUInt32Max();
 	}
 
 	public override void SetBaseStream(Stream stream)

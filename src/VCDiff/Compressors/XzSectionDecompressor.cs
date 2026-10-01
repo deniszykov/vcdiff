@@ -45,7 +45,7 @@ internal sealed class XzSectionDecompressor : IDisposable
 	/// <param name="windowSectionType">Which section <paramref name="sectionData" /> is.</param>
 	/// <param name="sectionData">The section: its uncompressed length (a varint) followed by the XZ data.</param>
 	/// <param name="maxLength">The largest uncompressed length accepted.</param>
-	/// <exception cref="InvalidFormatException">The uncompressed length is invalid or above <paramref name="maxLength" />.</exception>
+	/// <exception cref="VcdiffException">The uncompressed length is invalid or above <paramref name="maxLength" />.</exception>
 	public PooledArray Decompress(WindowSectionType windowSectionType, ReadOnlySequence<byte> sectionData, int maxLength = int.MaxValue)
 	{
 		ReadOnlySequenceStream compressedStream;
@@ -70,7 +70,7 @@ internal sealed class XzSectionDecompressor : IDisposable
 		}
 
 		var uncompressedLength = VarIntBe.ParseInt32(sectionData, out var uncompressedLengthByteCount);
-		if (uncompressedLength < 0 || uncompressedLength > maxLength) throw new InvalidFormatException("Invalid secondary-compressed section length");
+		if (uncompressedLength < 0 || uncompressedLength > maxLength) throw VcdiffException.InvalidSecondaryCompressedSectionLength();
 
 		var decompressedData = new PooledArray(uncompressedLength, this._bytePool);
 		try

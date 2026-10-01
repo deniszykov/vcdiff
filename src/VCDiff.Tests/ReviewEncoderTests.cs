@@ -308,7 +308,7 @@ public class ReviewEncoderTests
 	public void MaxBufferSize_Overflow_Throws()
 	{
 		// 2048 MiB overflows the int window size; it must not silently degrade to tiny windows.
-		Assert.Throws<ArgumentOutOfRangeException>(() =>
+		Assert.Throws<VcdiffException>(() =>
 			new VcEncoder(new MemoryStream(new byte[16]), new MemoryStream(new byte[16]), new MemoryStream(), new VcEncoderOptions { MaxBufferSize = 2048 }));
 	}
 

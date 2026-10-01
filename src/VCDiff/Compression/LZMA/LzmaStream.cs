@@ -138,7 +138,7 @@ internal sealed class LzmaStream : Stream
 		else if (this._decoder!.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
 		{
 			// End-of-stream marker: not allowed inside LZMA2.
-			throw new InvalidFormatException("LZMA data error");
+			throw VcdiffException.LzmaDataError();
 		}
 	}
 
@@ -150,7 +150,7 @@ internal sealed class LzmaStream : Stream
 	{
 		if (this._uncompressedChunk) return;
 
-		if (this._decoder!.HasEndMarker) throw new InvalidFormatException("LZMA data error");
+		if (this._decoder!.HasEndMarker) throw VcdiffException.LzmaDataError();
 
 		// Check range corruption scenario
 		if (!this._rangeDecoder.IsFinished || this._rangeDecoder.Total != this._rangeDecoderLimit)
@@ -160,13 +160,13 @@ internal sealed class LzmaStream : Stream
 			if (!this._decoder.Code(this._dictionarySize, this._outWindow, this._rangeDecoder))
 			{
 				this._rangeDecoder.ReleaseStream();
-				throw new InvalidFormatException("LZMA data error");
+				throw VcdiffException.LzmaDataError();
 			}
 		}
 
 		this._rangeDecoder.ReleaseStream();
 
-		if (this._outWindow.HasPending) throw new InvalidFormatException("LZMA data error");
+		if (this._outWindow.HasPending) throw VcdiffException.LzmaDataError();
 	}
 
 	private void DecodeChunkHeader()
@@ -175,7 +175,7 @@ internal sealed class LzmaStream : Stream
 
 		if (control == 0x00)
 		{
-			if (this._decoder is { HasEndMarker: true }) throw new InvalidFormatException("LZMA data error");
+			if (this._decoder is { HasEndMarker: true }) throw VcdiffException.LzmaDataError();
 
 			this._endReached = true;
 			return;
@@ -187,7 +187,7 @@ internal sealed class LzmaStream : Stream
 			this._needDictReset = false;
 			this._outWindow.Reset();
 		}
-		else if (this._needDictReset) throw new InvalidFormatException("LZMA data error");
+		else if (this._needDictReset) throw VcdiffException.LzmaDataError();
 
 		if (control >= 0x80)
 		{
@@ -209,7 +209,7 @@ internal sealed class LzmaStream : Stream
 				this._decoder.SetDecoderProperties(this._properties);
 			}
 			else if (this._needProps)
-				throw new InvalidFormatException("LZMA data error");
+				throw VcdiffException.LzmaDataError();
 			else if (control >= 0xA0)
 			{
 				this._decoder ??= new LzmaDecoder();
@@ -219,7 +219,7 @@ internal sealed class LzmaStream : Stream
 			this._rangeDecoder.Init(this._inputStream, this._rangeDecoderLimit);
 		}
 		else if (control > 0x02)
-			throw new InvalidFormatException("LZMA data error");
+			throw VcdiffException.LzmaDataError();
 		else
 		{
 			this._uncompressedChunk = true;

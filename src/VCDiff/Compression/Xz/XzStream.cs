@@ -65,7 +65,7 @@ internal sealed class XzStream : ReadOnlyStream
 			case CheckType.SHA256:
 				break;
 			default:
-				throw new InvalidFormatException("Check Type unknown to this version of decoder.");
+				throw VcdiffException.UnknownCheckType();
 		}
 
 		this._headerIsRead = true;

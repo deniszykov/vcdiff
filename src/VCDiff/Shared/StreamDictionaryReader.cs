@@ -32,7 +32,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 	public StreamDictionaryReader(Stream stream, ArrayPool<byte> pool, RecyclableMemoryStream bufferStream)
 	{
 		if (!stream.CanSeek)
-			throw new ArgumentException("The dictionary stream must be seekable.", nameof(stream));
+			throw VcdiffException.StreamIsNotSeekable();
 
 		this._stream = stream;
 		this._pool = pool;
@@ -192,7 +192,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 
 			var read = this._stream.Read(buffer);
 			if (read <= 0)
-				throw new EndOfStreamException("The dictionary stream ended before its reported length.");
+				throw VcdiffException.DictionaryStreamEndedEarly();
 
 			this._bufferStream.Advance(read);
 		}
@@ -209,7 +209,7 @@ public sealed unsafe class StreamDictionaryReader : IDictionaryReader
 		{
 			var read = this._stream.Read(destination);
 			if (read <= 0)
-				throw new EndOfStreamException("The dictionary stream ended before its reported length.");
+				throw VcdiffException.DictionaryStreamEndedEarly();
 
 			destination = destination.Slice(read);
 		}

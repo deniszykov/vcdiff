@@ -119,7 +119,7 @@ internal sealed class DeltaInputBuffer : IDisposable
 		var remaining = this._length - this._position;
 		var required = (long)remaining + extra;
 		if (required > int.MaxValue)
-			throw new OutOfMemoryException("The streaming buffer can not be larger than 2 GiB.");
+			throw VcdiffException.StreamingBufferTooLarge();
 
 		// Reclaim the consumed prefix before growing; this is amortized by the growth itself.
 		if (required <= this._buffer.Length)

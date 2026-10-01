@@ -98,7 +98,7 @@ internal sealed class RangeDecoder
 		if (read <= 0)
 		{
 			// The chunk header promised more compressed bytes than the input holds.
-			if (remaining > 0) throw new IncompleteArchiveException("Unexpected end of LZMA chunk.");
+			if (remaining > 0) throw VcdiffException.UnexpectedEndOfLzmaChunk();
 
 			// Corrupt data asked for bytes past the chunk: feed padding, the chunk-end checks reject it.
 			this._fastEndOfStream = true;

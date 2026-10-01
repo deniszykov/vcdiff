@@ -43,7 +43,7 @@ internal sealed class XzBlock : ReadOnlyStream
 		: base(stream)
 	{
 		var checkSize = XzHeader.GetCheckSize(checkType);
-		if (checkSize < 0 || checkSize > MAX_CHECK_SIZE) throw new InvalidFormatException("Unsupported XZ check size");
+		if (checkSize < 0 || checkSize > MAX_CHECK_SIZE) throw VcdiffException.UnsupportedXzCheckSize();
 
 		this._checkType = checkType;
 		this._checkSize = checkSize;
@@ -102,7 +102,7 @@ internal sealed class XzBlock : ReadOnlyStream
 		{
 			Span<byte> paddingBytes = stackalloc byte[4 - (int)bytes];
 			this.BaseStream.ReadExactOrThrow(paddingBytes);
-			if (!ReadHelpers.IsAllZero(paddingBytes)) throw new InvalidFormatException("Padding bytes were non-null");
+			if (!ReadHelpers.IsAllZero(paddingBytes)) throw VcdiffException.NonNullPaddingBytes();
 		}
 
 		this._paddingSkipped = true;
@@ -142,25 +142,25 @@ internal sealed class XzBlock : ReadOnlyStream
 			case CheckType.NONE:
 				break;
 			case CheckType.CRC32:
-				if (expected.Length != sizeof(uint) || BinaryPrimitives.ReadUInt32LittleEndian(expected) != ~this._crc32) throw new InvalidFormatException("Block check corrupt");
+				if (expected.Length != sizeof(uint) || BinaryPrimitives.ReadUInt32LittleEndian(expected) != ~this._crc32) throw VcdiffException.BlockCheckCorrupt();
 
 				break;
 			case CheckType.CRC64:
-				if (expected.Length != sizeof(ulong) || BinaryPrimitives.ReadUInt64LittleEndian(expected) != ~this._crc64) throw new InvalidFormatException("Block check corrupt");
+				if (expected.Length != sizeof(ulong) || BinaryPrimitives.ReadUInt64LittleEndian(expected) != ~this._crc64) throw VcdiffException.BlockCheckCorrupt();
 
 				break;
 			case CheckType.SHA256:
 				this.FinalizeSha256Check(expected);
 				break;
 			default:
-				throw new InvalidFormatException("Unsupported XZ check type");
+				throw VcdiffException.UnsupportedXzCheckType();
 		}
 	}
 
 	private void FinalizeSha256Check(ReadOnlySpan<byte> expected)
 	{
 		Span<byte> hash = stackalloc byte[SHA256_SIZE];
-		if (!this._sha256!.TryGetHashAndReset(hash, out var written) || !expected.SequenceEqual(hash.Slice(0, written))) throw new InvalidFormatException("Block check corrupt");
+		if (!this._sha256!.TryGetHashAndReset(hash, out var written) || !expected.SequenceEqual(hash.Slice(0, written))) throw VcdiffException.BlockCheckCorrupt();
 	}
 
 	private void ConnectStream()
@@ -214,7 +214,7 @@ internal sealed class XzBlock : ReadOnlyStream
 
 		var crc = this.BaseStream.ReadUInt32LittleEndianOrThrow();
 		var calcCrc = Crc32.Compute(blockHeaderWithoutCrc);
-		if (crc != calcCrc) throw new InvalidFormatException("Block header corrupt");
+		if (crc != calcCrc) throw VcdiffException.BlockHeaderCorrupt();
 	}
 
 	private void ReadBlockFlags(ref XzSpanReader reader)
@@ -225,9 +225,7 @@ internal sealed class XzBlock : ReadOnlyStream
 
 		if (reserved != 0)
 		{
-			throw new InvalidFormatException(
-				"Reserved bytes used, perhaps an unknown XZ implementation"
-			);
+			throw VcdiffException.ReservedXzBytesUsed();
 		}
 
 		// Optional compressed / uncompressed sizes: validated as XZ integers, not needed for sequential decoding.
@@ -246,20 +244,18 @@ internal sealed class XzBlock : ReadOnlyStream
 			if (
 				(i + 1 == this._numFilters && !filter.AllowAsLast) || (i + 1 < this._numFilters && !filter.AllowAsNonLast)
 			)
-				throw new InvalidFormatException("Block Filters in bad order");
+				throw VcdiffException.BlockFiltersBadOrder();
 
 			if (filter.ChangesDataSize && i + 1 < this._numFilters) nonLastSizeChangers++;
 		}
 
 		if (nonLastSizeChangers > 2)
 		{
-			throw new InvalidFormatException(
-				"More than two non-last block filters cannot change stream size"
-			);
+			throw VcdiffException.TooManySizeChangingFilters();
 		}
 
 		var blockHeaderPaddingSize = this.BlockHeaderSize - (4 + reader.Position);
 		var blockHeaderPadding = reader.ReadBytes(blockHeaderPaddingSize);
-		if (!ReadHelpers.IsAllZero(blockHeaderPadding)) throw new InvalidFormatException("Block header contains unknown fields");
+		if (!ReadHelpers.IsAllZero(blockHeaderPadding)) throw VcdiffException.BlockHeaderUnknownFields();
 	}
 }

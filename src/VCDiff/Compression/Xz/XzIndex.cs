@@ -40,13 +40,13 @@ internal static class XzIndex
 			Span<byte> padding = stackalloc byte[3];
 			padding = padding.Slice(0, paddingSize);
 			stream.ReadExactOrThrow(padding);
-			if (!ReadHelpers.IsAllZero(padding)) throw new InvalidFormatException("Padding bytes were non-null");
+			if (!ReadHelpers.IsAllZero(padding)) throw VcdiffException.NonNullPaddingBytes();
 
 			crc = Crc32.Update(crc, padding);
 			size += paddingSize;
 		}
 
-		if (stream.ReadUInt32LittleEndianOrThrow() != ~crc) throw new InvalidFormatException("Index corrupt");
+		if (stream.ReadUInt32LittleEndianOrThrow() != ~crc) throw VcdiffException.IndexCorrupt();
 
 		return size + sizeof(uint);
 	}

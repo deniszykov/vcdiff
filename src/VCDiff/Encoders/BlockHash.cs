@@ -55,7 +55,7 @@ internal sealed unsafe class BlockHash : IDisposable
 		this.dictionaryReader = dictionaryReader;
 
 		var tableSize = this.CalcTableSize();
-		if (tableSize == 0) throw new Exception("BlockHash Table Size is Invalid == 0");
+		if (tableSize == 0) throw VcdiffException.BlockHashTableSizeInvalid();
 
 		this.blocksCount = (int)(dictionaryReader.Length / blockSize);
 

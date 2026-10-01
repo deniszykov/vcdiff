@@ -98,9 +98,9 @@ public class VcDecoder : IDisposable
     ///     <see cref="VcDiffResult.SUCCESS" /> when the whole delta was applied, <see cref="VcDiffResult.EOD" /> when the
     ///     delta ended early (or was already decoded) and <see cref="VcDiffResult.ERROR" /> when it is invalid.
     /// </returns>
-    /// <exception cref="ArgumentException">The maximum target file size is not positive.</exception>
-    /// <exception cref="InvalidOperationException">A target window is larger than the maximum target file size.</exception>
-    /// <exception cref="NotSupportedException">The delta uses an unsupported secondary compressor.</exception>
+    /// <exception cref="VcdiffException">The maximum target file size is not positive.</exception>
+    /// <exception cref="VcdiffException">A target window is larger than the maximum target file size.</exception>
+    /// <exception cref="VcdiffException">The delta uses an unsupported secondary compressor.</exception>
     public VcDiffResult Decode(out long bytesWritten)
 	{
 		bytesWritten = 0;
@@ -214,7 +214,7 @@ public class VcDecoder : IDisposable
 			return false;
 
 		if (this._options.MaxTargetFileSize <= 0)
-			throw new ArgumentException("MaxTargetFileSize must be a positive value.", "maxTargetFileSize");
+			throw VcdiffException.MaxTargetFileSizeNotPositive();
 
 		// Every call runs the delta to its end, to an error or to an exception: the decoder is single use.
 		this._completed = true;
@@ -279,10 +279,8 @@ public class VcDecoder : IDisposable
 			default:
 				result = this._decoder!.Failure switch {
 					DecodeFailure.Truncated => VcDiffResult.EOD,
-					DecodeFailure.TargetWindowTooLarge => throw new InvalidOperationException(
-						$"Length of a target window exceeds the limit of {this._options.MaxTargetFileSize} bytes."),
-					DecodeFailure.UnsupportedSecondaryCompressor => throw new NotSupportedException(
-						"The delta uses a secondary compressor other than xdelta3 LZMA (id 2), which is not supported."),
+					DecodeFailure.TargetWindowTooLarge => throw VcdiffException.TargetWindowTooLarge(this._options.MaxTargetFileSize),
+					DecodeFailure.UnsupportedSecondaryCompressor => throw VcdiffException.UnsupportedSecondaryCompressor(),
 					_ => VcDiffResult.ERROR
 				};
 				break;

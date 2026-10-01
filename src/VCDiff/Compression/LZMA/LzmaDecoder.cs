@@ -35,7 +35,7 @@ internal sealed partial class LzmaDecoder
 		var remainder = properties / 9;
 		var lp = remainder % 5;
 		var pb = remainder / 5;
-		if (pb > LzmaBase.K_NUM_POS_STATES_BITS_MAX) throw new InvalidFormatException("Invalid LZMA properties");
+		if (pb > LzmaBase.K_NUM_POS_STATES_BITS_MAX) throw VcdiffException.InvalidLzmaProperties();
 
 		this._posStateMask = ((uint)1 << pb) - 1;
 		this.CreateFastModel(lp, lc);

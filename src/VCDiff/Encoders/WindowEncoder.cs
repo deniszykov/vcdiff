@@ -258,12 +258,12 @@ internal sealed class WindowEncoder : IDisposable
 		//end of delta encoding
 
 		// Counted rather than read from outputStream.Position, so the output stream does not have to be seekable.
-		if (lengthOfDelta != pos - sizeBeforeDelta + sectionsLength) throw new IOException("Delta output length does not match");
+		if (lengthOfDelta != pos - sizeBeforeDelta + sectionsLength) throw VcdiffException.DeltaOutputLengthMismatch();
 
 		this.dataForAddAndRun.SetLength(0);
 		this.instructionAndSizes.SetLength(0);
 		this.addressForCopy.SetLength(0);
-		if (this.targetLength == 0) throw new IOException("Empty target window");
+		if (this.targetLength == 0) throw VcdiffException.EmptyTargetWindow();
 	}
 
 	public void Dispose()

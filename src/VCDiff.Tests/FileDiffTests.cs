@@ -207,7 +207,7 @@ public class FileDiffTests
 		using var deltaStream = new MemoryStream();
 		using var outputStream = new MemoryStream();
 		using var coder = new VcEncoder(srcStream, targetStream, deltaStream);
-		Assert.Throws<ArgumentException>(() => coder.Encode(true, ChecksumFormat.Xdelta3)); //encodes with no checksum and not interleaved
+		Assert.Throws<VcdiffException>(() => coder.Encode(true, ChecksumFormat.Xdelta3)); //encodes with no checksum and not interleaved
 	}
 
 	[Fact]
@@ -229,14 +229,14 @@ public class FileDiffTests
 		long bytesWritten = 0;
 
 		using var decoder = new VcDecoder(srcStream, deltaStream, outputStream, -1);
-		Assert.Throws<ArgumentException>(() => decoder.Decode(out bytesWritten));
+		Assert.Throws<VcdiffException>(() => decoder.Decode(out bytesWritten));
 
 		srcStream.Position = 0;
 		targetStream.Position = 0;
 		deltaStream.Position = 0;
 
 		using var decoder1 = new VcDecoder(srcStream, deltaStream, outputStream, 2);
-		Assert.Throws<InvalidOperationException>(() => decoder1.Decode(out bytesWritten));
+		Assert.Throws<VcdiffException>(() => decoder1.Decode(out bytesWritten));
 	}
 
 	[Fact]

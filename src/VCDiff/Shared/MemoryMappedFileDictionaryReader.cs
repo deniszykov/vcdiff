@@ -57,7 +57,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 
 		var length = new FileInfo(path).Length;
 		if (length > int.MaxValue)
-			throw new ArgumentException("The dictionary can not be larger than 2 GiB.", nameof(path));
+			throw VcdiffException.DictionaryTooLarge();
 
 		// An empty file can not back a memory-mapped view with zero capacity, so it is handled without mapping.
 		if (length == 0)
@@ -99,7 +99,7 @@ public sealed unsafe class MemoryMappedFileDictionaryReader : IDictionaryReader
 		if (length < 0)
 			throw new ArgumentOutOfRangeException(nameof(length));
 		if (length > int.MaxValue)
-			throw new ArgumentException("The dictionary can not be larger than 2 GiB.", nameof(length));
+			throw VcdiffException.DictionaryTooLarge();
 
 		try
 		{

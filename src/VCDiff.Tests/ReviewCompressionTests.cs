@@ -174,7 +174,7 @@ public class ReviewCompressionTests
 		Assert.Equal(6, s.ReadByte());
 		Assert.Equal(-1, s.ReadByte());
 
-		Assert.Throws<IOException>(() => s.Seek(-1, SeekOrigin.Begin));
+		Assert.Throws<VcdiffException>(() => s.Seek(-1, SeekOrigin.Begin));
 		Assert.Throws<ArgumentOutOfRangeException>(() => s.Position = -1);
 	}
 
@@ -430,7 +430,7 @@ public class ReviewCompressionTests
 	}
 
 	/// <summary>
-	///     Truncated secondary-compressed input must surface as <see cref="IncompleteArchiveException" /> on every target
+	///     Truncated secondary-compressed input must surface as <see cref="VcdiffException" /> on every target
 	///     framework (on net8.0 a call bound to the BCL <c>Stream.ReadExactly</c> threw EndOfStreamException instead).
 	/// </summary>
 	[Fact]
@@ -445,7 +445,7 @@ public class ReviewCompressionTests
 		{
 			using var decompressor = new XzSectionDecompressor();
 			var truncated = new ReadOnlySequence<byte>(data, 0, cut);
-			Assert.Throws<IncompleteArchiveException>(() => Decompress(decompressor, type, truncated));
+			Assert.Throws<VcdiffException>(() => Decompress(decompressor, type, truncated));
 		}
 	}
 
@@ -453,7 +453,7 @@ public class ReviewCompressionTests
 	public void XzStream_TruncatedHeader_ThrowsIncompleteArchive()
 	{
 		using var xz = new VCDiff.Compression.Xz.XzStream(new MemoryStream(new byte[] { 0xFD, 0x37, 0x7A }));
-		Assert.Throws<IncompleteArchiveException>(() => xz.ReadExactOrThrow(new byte[1]));
-		Assert.Throws<IncompleteArchiveException>(() => new MemoryStream(new byte[3]).ReadExactOrThrow(new byte[4]));
+		Assert.Throws<VcdiffException>(() => xz.ReadExactOrThrow(new byte[1]));
+		Assert.Throws<VcdiffException>(() => new MemoryStream(new byte[3]).ReadExactOrThrow(new byte[4]));
 	}
 }

@@ -119,7 +119,7 @@ internal sealed class ReadOnlySequenceStream : Stream
 			SeekOrigin.End => this._sequence.Length + offset,
 			_ => throw new ArgumentOutOfRangeException(nameof(origin))
 		};
-		if (target < 0) throw new IOException("An attempt was made to move the position before the beginning of the stream.");
+		if (target < 0) throw VcdiffException.SeekBeforeBeginOfStream();
 
 		this.SeekTo(target);
 		return target;

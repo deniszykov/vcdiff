@@ -304,7 +304,7 @@ internal sealed partial class LzmaDecoder
 						if (DecodeBitFast(ref rs, pIsRep0Long, matchIndex) == 0)
 						{
 							// A short rep copies the byte at rep0; with an empty window there is none.
-							if (os.Total == 0) throw new InvalidFormatException("LZMA data error");
+							if (os.Total == 0) throw VcdiffException.LzmaDataError();
 
 							this._state.UpdateShortRep();
 							os.PutByte(os.GetByte((int)this._rep0));
@@ -392,7 +392,7 @@ internal sealed partial class LzmaDecoder
 					rangeDecoder.AddTotal(rs.Consumed);
 					outWindow.FastPos = os.Pos;
 					outWindow.FastTotal = os.Total;
-					throw new InvalidFormatException("LZMA data error");
+					throw VcdiffException.LzmaDataError();
 				}
 
 				os.CopyBlock((int)this._rep0, (int)len);

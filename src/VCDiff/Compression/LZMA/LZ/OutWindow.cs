@@ -42,7 +42,7 @@ internal sealed class OutWindow : IDisposable
 
 	public void Create(int windowSize)
 	{
-		if (windowSize <= 0) throw new InvalidFormatException($"LZMA: invalid dictionary size {windowSize}");
+		if (windowSize <= 0) throw VcdiffException.InvalidLzmaDictionarySize(windowSize);
 
 		if (this.FastWindowSize != windowSize)
 		{
@@ -99,7 +99,7 @@ internal sealed class OutWindow : IDisposable
 			if (curSize > this.FastLimit - this.FastTotal) curSize = (int)(this.FastLimit - this.FastTotal);
 			if (curSize > size) curSize = size;
 			var numReadBytes = stream.Read(this.FastBuffer, this.FastPos, curSize);
-			if (numReadBytes == 0) throw new IncompleteArchiveException("Unexpected end of LZMA2 uncompressed chunk.");
+			if (numReadBytes == 0) throw VcdiffException.UnexpectedEndOfLzma2Chunk();
 
 			size -= numReadBytes;
 			this.FastPos += numReadBytes;

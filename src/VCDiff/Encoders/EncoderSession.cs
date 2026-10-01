@@ -55,21 +55,19 @@ internal sealed class EncoderSession : IDisposable
 			if (maxBufferSize <= 0)
 				maxBufferSize = 1;
 			if (maxBufferSize > MAX_BUFFER_SIZE_MIB)
-				throw new ArgumentOutOfRangeException(nameof(options), $"{nameof(VcEncoderOptions.MaxBufferSize)} can not exceed {MAX_BUFFER_SIZE_MIB} MiB.");
+				throw VcdiffException.MaxBufferSizeExceeded(MAX_BUFFER_SIZE_MIB);
 
 			var blockSize = options.BlockSize;
 			if (blockSize < 2 || blockSize % 2 != 0)
-				throw new ArgumentException($"{nameof(VcEncoderOptions.BlockSize)} must be an even number of at least 2, but is {blockSize}.", nameof(options));
+				throw VcdiffException.BlockSizeInvalid(blockSize);
 
 			var minMatchSize = options.ChunkSize < 2 ? blockSize * 2 : options.ChunkSize;
 			if (minMatchSize < 2 * blockSize)
-				throw new ArgumentException(
-					$"{nameof(VcEncoderOptions.ChunkSize)} ({minMatchSize}) can not be less than twice the {nameof(VcEncoderOptions.BlockSize)} ({blockSize}).",
-					nameof(options));
+				throw VcdiffException.ChunkSizeTooSmall(minMatchSize, blockSize);
 
 			var rollingHash = options.RollingHash;
 			if (rollingHash != null && rollingHash.WindowSize != blockSize)
-				throw new ArgumentException("Supplied RollingHash instance has a different window size than blocksize!", nameof(options));
+				throw VcdiffException.RollingHashWindowMismatch();
 
 			this.WindowSize = maxBufferSize * MEBIBYTE;
 			this._blockSize = blockSize;
@@ -91,7 +89,7 @@ internal sealed class EncoderSession : IDisposable
 	public static void ValidateFormat(bool interleaved, ChecksumFormat checksumFormat)
 	{
 		if (interleaved && checksumFormat == ChecksumFormat.Xdelta3)
-			throw new ArgumentException("Interleaved diffs can not have an xdelta3 checksum!");
+			throw VcdiffException.InterleavedXdelta3ChecksumNotSupported();
 	}
 
 	/// <summary>

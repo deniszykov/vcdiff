@@ -31,7 +31,7 @@ internal abstract class ReadOnlyStream : Stream
 	protected ReadOnlyStream(Stream baseStream)
 	{
 		this.BaseStream = baseStream;
-		if (!baseStream.CanRead) throw new InvalidFormatException("Must be able to read from stream");
+		if (!baseStream.CanRead) throw VcdiffException.StreamNotReadable();
 	}
 
 	public override int Read(byte[] buffer, int offset, int count)

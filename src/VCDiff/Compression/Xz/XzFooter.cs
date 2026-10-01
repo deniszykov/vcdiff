@@ -25,13 +25,13 @@ internal static class XzFooter
 		stream.ReadExactOrThrow(footer);
 
 		var backwardSizeAndFlags = footer.Slice(4, 6);
-		if (BinaryPrimitives.ReadUInt32LittleEndian(footer) != Crc32.Compute(backwardSizeAndFlags)) throw new InvalidFormatException("Footer corrupt");
+		if (BinaryPrimitives.ReadUInt32LittleEndian(footer) != Crc32.Compute(backwardSizeAndFlags)) throw VcdiffException.FooterCorrupt();
 
-		if (!footer.Slice(10, 2).SequenceEqual(MagicBytes)) throw new InvalidFormatException("Magic footer missing");
+		if (!footer.Slice(10, 2).SequenceEqual(MagicBytes)) throw VcdiffException.MagicFooterMissing();
 
-		if (XzHeader.ParseStreamFlags(backwardSizeAndFlags.Slice(4, 2)) != checkType) throw new InvalidFormatException("Stream footer flags do not match the header");
+		if (XzHeader.ParseStreamFlags(backwardSizeAndFlags.Slice(4, 2)) != checkType) throw VcdiffException.StreamFooterFlagsMismatch();
 
 		var backwardSize = ((long)BinaryPrimitives.ReadUInt32LittleEndian(backwardSizeAndFlags) + 1) * 4;
-		if (backwardSize != indexSize) throw new InvalidFormatException("Stream footer backward size does not match the index");
+		if (backwardSize != indexSize) throw VcdiffException.StreamFooterBackwardSizeMismatch();
 	}
 }

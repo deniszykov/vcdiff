@@ -156,7 +156,7 @@ public sealed class VcDiffDecoder : IDisposable
 	{
 		options ??= new VcDecoderOptions();
 		if (options.MaxTargetFileSize <= 0)
-			throw new ArgumentOutOfRangeException(nameof(options), "MaxTargetFileSize must be positive.");
+			throw VcdiffException.MaxTargetFileSizeNotPositive();
 
 		return options;
 	}

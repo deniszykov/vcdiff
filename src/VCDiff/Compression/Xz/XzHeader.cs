@@ -20,10 +20,10 @@ internal static class XzHeader
 	{
 		Span<byte> header = stackalloc byte[SIZE];
 		stream.ReadExactOrThrow(header);
-		if (!header.Slice(0, MagicHeader.Length).SequenceEqual(MagicHeader)) throw new InvalidFormatException("Invalid XZ Stream");
+		if (!header.Slice(0, MagicHeader.Length).SequenceEqual(MagicHeader)) throw VcdiffException.InvalidXzStream();
 
 		var streamFlags = header.Slice(6, 2);
-		if (BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(8)) != Crc32.Compute(streamFlags)) throw new InvalidFormatException("Stream header corrupt");
+		if (BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(8)) != Crc32.Compute(streamFlags)) throw VcdiffException.StreamHeaderCorrupt();
 
 		return ParseStreamFlags(streamFlags);
 	}
@@ -31,7 +31,7 @@ internal static class XzHeader
 	/// <summary>Validates the two stream-flag bytes (shared by header and footer) and returns the check type.</summary>
 	public static CheckType ParseStreamFlags(ReadOnlySpan<byte> streamFlags)
 	{
-		if (streamFlags[0] != 0 || (streamFlags[1] & 0xF0) != 0) throw new InvalidFormatException("Unknown XZ Stream Version");
+		if (streamFlags[0] != 0 || (streamFlags[1] & 0xF0) != 0) throw VcdiffException.UnknownXzStreamVersion();
 
 		return (CheckType)(streamFlags[1] & 0x0F);
 	}

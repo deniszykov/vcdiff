@@ -24,12 +24,12 @@ internal abstract class BlockFilter : ReadOnlyStream
 		var filterType = reader.ReadXzInteger();
 		BlockFilter filter = filterType switch {
 			LZMA2_FILTER_ID => new Lzma2Filter(),
-			_ => throw new NotImplementedException($"Filter {filterType} has not yet been implemented")
+			_ => throw VcdiffException.FilterNotImplemented(filterType)
 		};
 		filter.BytePool = bytePool;
 
 		var sizeOfProperties = reader.ReadXzInteger();
-		if (sizeOfProperties > int.MaxValue) throw new InvalidFormatException("Block filter information too large");
+		if (sizeOfProperties > int.MaxValue) throw VcdiffException.BlockFilterInfoTooLarge();
 
 		filter.Init(reader.ReadBytes((int)sizeOfProperties));
 		return filter;
