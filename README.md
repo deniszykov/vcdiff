@@ -209,6 +209,64 @@ static void Decode(VcdiffSpanDecoder decoder, Stream source, Stream destination)
 }
 ```
 
+### Dictionary sources (`ISourceReader`)
+
+Both API families read the dictionary through `ISourceReader` (in `VCDiff.Shared`) — a random-access,
+read-only view of the dictionary bytes that the encoder hashes and the decoder copies from. It is
+`IDisposable` and not thread-safe. Three implementations ship with the library:
+
+| Type | Backing | Best for |
+|------|---------|----------|
+| `SequenceSourceReader` | a `ReadOnlySequence<byte>` | dictionaries already in memory (arrays, `RecyclableMemoryStream`, `PipeReader`) |
+| `MemoryMappedFileSourceReader` | a memory-mapped file | large dictionaries without loading them into the managed heap |
+| `StreamSourceReader` | a seekable `Stream` | on-demand (Seek + Read) access, no full load |
+
+The span codecs accept either a `ReadOnlySequence<byte>` or any `ISourceReader`:
+
+```csharp
+public VcdiffSpanEncoder(ReadOnlySequence<byte> dictionary, VcdiffEncoderOptions? options = null);
+public VcdiffSpanEncoder(ISourceReader dictionary, VcdiffEncoderOptions? options = null);
+
+public VcdiffSpanDecoder(ReadOnlySequence<byte> dictionary, VcdiffDecoderOptions? options = null);
+public VcdiffSpanDecoder(ISourceReader dictionary, VcdiffDecoderOptions? options = null);
+```
+
+`VcdiffDictionary.Read(stream)` (shown above) is the in-memory shortcut: it reads a stream into a
+pooled `RecyclableMemoryStream` and hands its `GetReadOnlySequence()` to a `SequenceSourceReader`.
+
+#### Memory-mapping a dictionary file
+
+`MemoryMappedFileSourceReader` maps a dictionary file read-only and reads it in place through a raw
+pointer, so a multi-gigabyte dictionary never has to be copied into a contiguous managed array.
+
+```csharp
+using System.IO;
+using System.IO.MemoryMappedFiles;
+using VCDiff.Encoders;
+using VCDiff.Shared;
+
+// From a path — the reader owns the mapping and the file, and disposes both.
+using (var dictionary = new MemoryMappedFileSourceReader("fileA.bin"))
+using (var delta = File.Create("diff.bin"))
+using (var encoder = new VcdiffSpanEncoder(dictionary))
+{
+    Encode(encoder, File.OpenRead("fileB.bin"), delta);
+}
+
+// From an existing mapping — leaveOpen: true keeps the file open after the reader is disposed.
+long length = new FileInfo("fileA.bin").Length;
+using (var file = MemoryMappedFile.CreateFromFile(
+           "fileA.bin", FileMode.Open, null, length, MemoryMappedFileAccess.Read))
+using (var dictionary = new MemoryMappedFileSourceReader(file, length, leaveOpen: true))
+{
+    // ...
+}
+```
+
+The whole file is mapped from offset zero, so `Length` is the file length. The dictionary is limited
+to 2 GiB (VCDIFF addresses are 32-bit in this implementation), and the mapping is valid only until
+`Dispose` — do not read the dictionary after disposing the reader.
+
 <details><summary>The original readme, with some changes to the API usage examples</summary>
 <p>
 
