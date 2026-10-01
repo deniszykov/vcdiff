@@ -16,7 +16,7 @@
         <PackageId>deniszykov.VCDiff</PackageId>
         <Authors>Metric;chyyran;Snowflake Authors, Denis Zykov</Authors>
         <PackageTags>diff;difference;patch;sdch;compare;delta;vcdiff;bsdiff</PackageTags>
-        <RepositoryUrl>https://github.com/SnowflakePowered/vcdiff</RepositoryUrl>
+        <RepositoryUrl>https://github.com/deniszykov/vcdiff/vcdiff</RepositoryUrl>
         <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
         <Title>vcdiff</Title>
         <Description>A fast, pure C# implementation of the VCDIFF algorithm.</Description>
