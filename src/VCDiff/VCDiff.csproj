@@ -6,7 +6,7 @@
         <TargetFrameworks>netcoreapp3.1;net8.0;</TargetFrameworks>
         <LangVersion>latest</LangVersion>
         <Nullable>enable</Nullable>
-        <Version>6.1.0</Version>
+        <Version>6.2.0</Version>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <NoWarn>$(NoWarn);CS1591</NoWarn>
@@ -20,9 +20,14 @@
         <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
         <Title>vcdiff</Title>
         <Description>A fast, pure C# implementation of the VCDIFF algorithm.</Description>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.1"/>
