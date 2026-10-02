@@ -184,8 +184,14 @@ public class SegmentedDictionaryTests
 	private static readonly Dictionary<string, string> Golden = new() {
 		{ "False/None/16", "43076B0B7EBA0F3AAFA13E849844318B5D2E49CAB3EF6127FB5C9D9B972675F7" },
 		{ "False/Sdch/16", "3A09E6CB91FBC611D6382180F550BD75CB7D9F12C5174A4ED54196F201F33A6F" },
-		{ "False/Xdelta3/32", "AA602B33F3E6480D105F05AA53C27D4E01FBF03296CED2C196A6D5D1C35D2A0F" },
+		{ "False/Xdelta3/32", "BB69E1BCACE6D50F90FBE2CB84F141F24CEC2C5F5A828AA65C64DB8E8B43EAD6" },
 		{ "True/None/16", "BD70E4641D87C1FF2824CB3967CD717F400E0D191C4B6A4F7D28F281BEFFF463" },
+		{ "True/Sdch/32", "C2C4A694A27C3DAA16A7A0D23940F9CE18995B9C7B9D7DCF714F691083FD2641" }
+	};
+
+	// Deltas produced with HashTableSizeMultiplier = 1 (one bucket per block), the smallest table.
+	private static readonly Dictionary<string, string> UnitMultiplierGolden = new() {
+		{ "False/Xdelta3/32", "AA602B33F3E6480D105F05AA53C27D4E01FBF03296CED2C196A6D5D1C35D2A0F" },
 		{ "True/Sdch/32", "81FB0CE4EE88498F36A22E8D973FF312F18D7ECED106362064C3466EDBE95046" }
 	};
 
@@ -203,6 +209,33 @@ public class SegmentedDictionaryTests
 		foreach (var layout in Layouts())
 		{
 			var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = checksumFormat, BlockSize = blockSize };
+			var delta = Encode(Split(dict, (int[])layout[0]), target, options);
+			Assert.Equal(golden, Hash(delta));
+		}
+	}
+
+	[Theory, InlineData(false, WindowChecksumFormat.Xdelta3, 32), InlineData(true, WindowChecksumFormat.Sdch, 32)]
+	public void Encoder_Output_WithUnitHashTableMultiplier(bool interleaved, WindowChecksumFormat checksumFormat, int blockSize)
+	{
+		var dict = MakeDictionary(300_000, 11);
+		var target = MakeTarget(dict, 1_300_000, 12);
+		var key = $"{interleaved}/{checksumFormat}/{blockSize}";
+		Assert.True(UnitMultiplierGolden.TryGetValue(key, out var golden), $"{{ \"{key}\", \"{Hash(LegacyEncode(dict, target, interleaved, checksumFormat, blockSize))}\" }},");
+
+		// The legacy stream encoder honours HashTableSizeMultiplier through the shared EncoderSession.
+		using (var src = new MemoryStream(dict))
+		using (var tgt = new MemoryStream(target))
+		using (var delta = new MemoryStream())
+		using (var enc = new VcdiffEncoder(src, tgt, delta, new VcdiffEncoderOptions { BlockSize = blockSize, HashTableSizeMultiplier = 1 }))
+		{
+			Assert.Equal(VcdiffResult.Success, enc.Encode(interleaved, checksumFormat));
+			Assert.Equal(golden, Hash(delta.ToArray()));
+		}
+
+		// The streaming encoder over a segmented dictionary must produce the same delta.
+		foreach (var layout in Layouts())
+		{
+			var options = new VcdiffEncoderOptions { Interleaved = interleaved, WindowChecksumFormat = checksumFormat, BlockSize = blockSize, HashTableSizeMultiplier = 1 };
 			var delta = Encode(Split(dict, (int[])layout[0]), target, options);
 			Assert.Equal(golden, Hash(delta));
 		}

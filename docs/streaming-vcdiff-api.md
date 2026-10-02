@@ -70,6 +70,7 @@ array, a `Memory<byte>`, or multiple segments (e.g. the result of
 |----------|---------|---------|
 | `MaxWindowSizeMiB` | `1` | Target **window** size in MiB. The encoder is block-oriented and emits one window per `Done`. |
 | `BlockSize` | `16` | Block size for hashing; must be even. |
+| `HashTableSizeMultiplier` | `0` (open-vcdiff default) | Hash-table buckets per dictionary block. `0` = one bucket per `sizeof(int)` bytes (`BlockSize / 4` per block, matching open-vcdiff, over-allocated to cut collisions); `1` = one bucket per block (smallest table, least memory). |
 | `MinMatchSize` | `0` (→ `2 * BlockSize`) | Minimum match length worth a `COPY`; must be ≥ `2 * BlockSize`. |
 | `Interleaved` | `false` | Emit the SDCH interleaved format. |
 | `WindowChecksumFormat` | `None` | `None`, `Sdch`, or `Xdelta3` window checksum. `Xdelta3` + `Interleaved` throws. |
@@ -253,7 +254,7 @@ with the dictionary.
 | What | Size | Where |
 |------|------|-------|
 | Dictionary | none (referenced in place) | caller's memory, pinned |
-| Encoder dictionary index | about 3 `int` per dictionary block (one hash-table bucket per block, rounded up to a power of two, plus two `int` per block), i.e. ~0.75–1 × the dictionary length for `BlockSize` 16; bounded by the active source segment length when `SetSourceSegment` is used | unmanaged, freed on `Dispose` |
+| Encoder dictionary index | by default one hash-table bucket per 4 dictionary bytes (rounded up to a power of two) plus two `int` per block — about 1.5–2.5 × the dictionary length for `BlockSize` 16, matching open-vcdiff; `HashTableSizeMultiplier = 1` shrinks the bucket table to one bucket per block (~0.75–1 ×). Bounded by the active source segment length when `SetSourceSegment` is used | unmanaged, freed on `Dispose` |
 | Encoder target window | `MaxWindowSizeMiB` MiB | `BytePool` |
 | Encoder window sections and pending output | up to one encoded window | pooled `RecyclableMemoryStream` blocks |
 | Decoder input buffer | 16 KiB (grows only for an oversized file header) | `BytePool` |
@@ -264,9 +265,10 @@ The decoder rejects a window whose target length or section lengths exceed `MaxT
 so a corrupt or hostile delta cannot make it rent an arbitrarily large buffer.
 
 The encoder index is the one allocation proportional to the dictionary. It is required for
-matching; if it is too large, raise `BlockSize` (the per-block part shrinks proportionally), or
-restrict the active source segment with `SetSourceSegment` so the index is sized by the segment
-instead of the whole dictionary.
+matching; if it is too large, raise `BlockSize` (the per-block part shrinks proportionally), set
+`HashTableSizeMultiplier` to `1` (one bucket per block instead of the open-vcdiff default of one
+per 4 bytes), or restrict the active source segment with `SetSourceSegment` so the index is sized
+by the segment instead of the whole dictionary.
 
 ## Appendix A — How a segmented dictionary is read
 

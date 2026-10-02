@@ -233,6 +233,19 @@ public class SourceSegmentTests
 		Assert.Equal(defaultDelta, explicitDelta);
 	}
 
+	[Theory, InlineData(0.0), InlineData(1.0), InlineData(4.0), InlineData(0.5)]
+	public void HashTableSizeMultiplier_RoundTrips(double multiplier)
+	{
+		var dict = MakeDictionary();
+		var target = MakeTarget(dict);
+
+		using var enc = new VcdiffSpanEncoder(Seq(dict), new VcdiffEncoderOptions { HashTableSizeMultiplier = multiplier });
+		var delta = EncodeStreaming(enc, target, 512, 512);
+
+		using var dec = new VcdiffSpanDecoder(Seq(dict));
+		Assert.Equal(target, DecodeStreaming(dec, delta, 512, 512));
+	}
+
 	// ------------------------------------------------------------------ COPY confinement
 
 	[Fact]

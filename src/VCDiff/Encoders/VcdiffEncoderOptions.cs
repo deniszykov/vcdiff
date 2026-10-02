@@ -25,6 +25,16 @@ public class VcdiffEncoderOptions
     public int BlockSize { get; set; } = 16;
 
     /// <summary>
+    ///     The number of hash-table buckets the encoder allocates per dictionary block, controlling the
+    ///     trade-off between index memory and hash collisions. The default (0) uses the open-vcdiff sizing —
+    ///     one bucket per <c>sizeof(int)</c> bytes, i.e. <c>BlockSize / 4</c> buckets per block — which
+    ///     over-allocates the table to reduce collisions. A value of 1 uses one bucket per block (the smallest
+    ///     table); values below 1 allocate fewer buckets than blocks (more collisions, less memory). The table
+    ///     is always rounded up to a power of two.
+    /// </summary>
+    public double HashTableSizeMultiplier { get; set; }
+
+    /// <summary>
     ///     The minimum size of a string match that is worth putting into a COPY. This must be
     ///     at least twice the block size. Values below 2 mean twice the block size.
     /// </summary>

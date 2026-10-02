@@ -23,6 +23,7 @@ internal sealed class EncoderSession : IDisposable
 	private readonly int _blockSize;
 	private readonly ISourceReader dictionaryReader;
 	private readonly RabinKarpHash _hasher;
+	private readonly double _hashTableSizeMultiplier;
 	private readonly RecyclableMemoryStreamManager _manager;
 	private readonly int _minMatchSize;
 	private readonly bool _ownsHasher;
@@ -72,6 +73,7 @@ internal sealed class EncoderSession : IDisposable
 			this.WindowSize = maxWindowSizeMiB * MEBIBYTE;
 			this._blockSize = blockSize;
 			this._minMatchSize = minMatchSize;
+			this._hashTableSizeMultiplier = options.HashTableSizeMultiplier;
 			this._manager = options.MemoryStreamManagerOrDefault;
 			this._ownsHasher = rabinKarpHash == null;
 			this._hasher = rabinKarpHash ?? new RabinKarpHash(blockSize);
@@ -111,7 +113,7 @@ internal sealed class EncoderSession : IDisposable
 		if (this._disposed)
 			throw new ObjectDisposedException(nameof(EncoderSession));
 
-		this._blockHash ??= new BlockHash(this.dictionaryReader, this._hasher, this._blockSize);
+		this._blockHash ??= new BlockHash(this.dictionaryReader, this._hasher, this._blockSize, this._hashTableSizeMultiplier);
 
 		return new ChunkEncoder(this._blockHash, this.dictionaryReader.Length, this._hasher, checksumFormat, interleaved, this._minMatchSize, this._manager);
 	}

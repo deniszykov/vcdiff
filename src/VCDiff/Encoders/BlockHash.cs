@@ -32,6 +32,10 @@ internal sealed unsafe class BlockHash : IDisposable
 	private readonly RabinKarpHash hasher;
 	private readonly int maxMatchesToCheck;
 	private readonly ISourceReader dictionaryReader;
+
+	// Buckets per dictionary block: 0 (or <= 0) uses the open-vcdiff default of one bucket per sizeof(int)
+	// bytes; a positive value over-allocates the bucket table by that factor relative to one bucket per block.
+	private readonly double hashTableSizeMultiplier;
 	private bool disposed;
 
 	// The dictionary sub-range [segmentOffset, segmentOffset + segmentLength) that this table indexes.
@@ -54,12 +58,17 @@ internal sealed unsafe class BlockHash : IDisposable
     /// <param name="dictionaryReader">the data to create the table for</param>
     /// <param name="hasher">the hashing method</param>
     /// <param name="blockSize">The block size to use</param>
-    public BlockHash(ISourceReader dictionaryReader, RabinKarpHash hasher, int blockSize = 16)
+    /// <param name="hashTableSizeMultiplier">
+    ///     Buckets per dictionary block; 0 (or negative) selects the open-vcdiff default of one bucket per
+    ///     <c>sizeof(int)</c> bytes.
+    /// </param>
+    public BlockHash(ISourceReader dictionaryReader, RabinKarpHash hasher, int blockSize = 16, double hashTableSizeMultiplier = 0)
 	{
 		this.BlockSize = blockSize;
 		this.maxMatchesToCheck = this.BlockSize >= 32 ? 32 : 32 * (32 / this.BlockSize);
 		this.hasher = hasher;
 		this.dictionaryReader = dictionaryReader;
+		this.hashTableSizeMultiplier = hashTableSizeMultiplier;
 	}
 
 	~BlockHash()
@@ -129,20 +138,37 @@ internal sealed unsafe class BlockHash : IDisposable
 
 	private long CalcTableSize()
 	{
-		// One bucket per block keeps the chains short; MAX_PROBES bounds the worst case.
-		var min = (long)this.blocksCount + 1;
+		long min;
+		if (this.hashTableSizeMultiplier <= 0)
+		{
+			// open-vcdiff default: over-allocate the table to one bucket per sizeof(int) bytes, so empty
+			// entries cut the probability of a hash collision to sizeof(int) / BlockSize.
+			min = this.segmentLength / sizeof(int) + 1;
+		}
+		else
+		{
+			// One bucket per block is the smallest table; the multiplier over-allocates beyond that. Probing
+			// stays bounded by MAX_PROBES / maxMatchesToCheck, so a smaller table trades ratio for memory.
+			var buckets = this.hashTableSizeMultiplier * this.blocksCount;
+			if (!double.IsFinite(buckets) || buckets >= int.MaxValue) return 0;
+
+			if (buckets < 1) buckets = 1;
+
+			min = (long)buckets + 1;
+		}
+
 		long size = 1;
 
 		while (size < min)
 		{
 			size <<= 1;
 
-			if (size <= 0) return 0;
+			if (size <= 0 || size > int.MaxValue) return 0;
 		}
 
 		if ((size & (size - 1)) != 0) return 0;
 
-		if (this.blocksCount > 0 && size > min * 2) return 0;
+		if (this.segmentLength > 0 && size > min * 2) return 0;
 
 		return size;
 	}

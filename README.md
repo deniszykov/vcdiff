@@ -67,6 +67,9 @@ using VCDiff.Encoders;
 var encoderOptions = new VcdiffEncoderOptions
 {
     BlockSize = 32,
+    // Omit for the open-vcdiff default (one hash bucket per 4 bytes); 1 = one bucket per block
+    // (smaller index, more collisions).
+    HashTableSizeMultiplier = 1,
     BytePool = ArrayPool<byte>.Shared,
 };
 using var encoder = new VcdiffEncoder(dictStream, targetStream, outputStream, encoderOptions);
