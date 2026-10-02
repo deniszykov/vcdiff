@@ -6,8 +6,13 @@ internal class Program
 {
 	private static void Main(string[] args)
 	{
-		// Discovers every [Benchmark] class in this assembly. Forward args so BenchmarkDotNet's
-		// switches work, e.g.: dotnet run -c Release -- --filter "*SpanEncode*" --job short
-		BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+		// Discovers every [Benchmark] class in this assembly. With no arguments it runs them all;
+		// pass BenchmarkDotNet switches to narrow the run, e.g.:
+		//   dotnet run -c Release -- --filter "*SpanEncode*"
+		var switcher = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly);
+		if (args.Length == 0)
+			switcher.RunAll();
+		else
+			switcher.Run(args);
 	}
 }

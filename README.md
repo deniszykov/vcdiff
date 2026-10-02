@@ -292,6 +292,35 @@ The whole file is mapped from offset zero, so `Length` is the file length. The d
 to 2 GiB (VCDIFF addresses are 32-bit in this implementation), and the mapping is valid only until
 `Dispose` — do not read the dictionary after disposing the reader.
 
+## Benchmarks
+
+Measured with BenchmarkDotNet (`dotnet run -c Release --project src/VCDiff.Benchmark`) on an AMD Ryzen 9
+5900X (Windows 11, .NET 8.0.31), encoding a 16 MiB target against a 16 MiB dictionary (3 warmup / 8
+iterations). "Slightly modified" targets are ~0.5% changed, "heavily modified" ~75% changed.
+
+### Streaming encoder (`VcdiffSpanEncoder`)
+
+`Restricted segment` bounds the encoder index to the first half of the dictionary via
+`SetSourceSegment(0, bytes / 2)`.
+
+| Scenario           | BlockSize | Full dictionary | Restricted segment |
+|--------------------|----------:|----------------:|-------------------:|
+| Slightly modified  | 16        | 101 ms          | 223 ms             |
+| Slightly modified  | 32        | 102 ms          | 220 ms             |
+| Heavily modified   | 16        | 943 ms          | 410 ms             |
+| Heavily modified   | 32        | 776 ms          | 458 ms             |
+
+Restricting the segment caps index memory but moves encode time in both directions: for heavily modified
+data it is ~2× faster (fewer probes over a smaller index), while for near-identical data it is ~2× slower
+(matches against the excluded half of the dictionary are lost and become `ADD`s).
+
+### Legacy `Stream` encoder / decoder
+
+| Scenario          | Encode (BlockSize 32) | Decode |
+|-------------------|----------------------:|-------:|
+| Slightly modified | 194 ms                | 856 ms |
+| Heavily modified  | 950 ms                | 816 ms |
+
 <details><summary>The original readme, with some changes to the API usage examples</summary>
 <p>
 
