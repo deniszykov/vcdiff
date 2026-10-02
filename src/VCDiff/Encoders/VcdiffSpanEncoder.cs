@@ -172,6 +172,53 @@ public sealed class VcdiffSpanEncoder : IDisposable
 		return OperationStatus.NeedMoreData;
 	}
 
+    /// <summary>
+    ///     Restricts the source segment that the windows which follow will be encoded against to the dictionary bytes
+    ///     <c>[offset, offset + length)</c>.
+    /// </summary>
+    /// <param name="offset">The start of the segment within the dictionary.</param>
+    /// <param name="length">The length of the segment. Zero means "no source": those windows are emitted without a source segment.</param>
+    /// <remarks>
+    ///     <para>
+    ///         The method may be called between <see cref="Encode" /> calls at any point. Any target bytes already buffered
+    ///         for the current window are cut into a short window and encoded against the <em>previous</em> segment; the
+    ///         resulting delta bytes go through the usual pending/drain path, so the caller must keep calling
+    ///         <see cref="Encode" /> to drain them.
+    ///     </para>
+    ///     <para>
+    ///         The encoder index is rebuilt to cover only <c>[offset, offset + length)</c>, so its memory is bounded by
+    ///         <paramref name="length" /> rather than the whole dictionary. COPY addresses in those windows are relative to
+    ///         the segment, and the window header carries the real segment length and position (RFC 3284 section 4.2). The
+    ///         output still decodes with any compliant decoder, including the legacy <see cref="VCDiff.Decoders.VcdiffDecoder" />.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">
+    ///     <paramref name="offset" /> or <paramref name="length" /> is negative, or the segment extends past the end of the
+    ///     dictionary.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">This encoder has been disposed.</exception>
+    public void SetSourceSegment(long offset, long length)
+	{
+		if (this._disposed)
+			throw new ObjectDisposedException(nameof(VcdiffSpanEncoder));
+		if (this._finished)
+			throw new InvalidOperationException("The encoder is finished and can not switch source segments.");
+		if (offset < 0)
+			throw new ArgumentOutOfRangeException(nameof(offset));
+		if (length < 0)
+			throw new ArgumentOutOfRangeException(nameof(length));
+
+		var dictionaryLength = this._session.DictionaryLength;
+		if (offset > dictionaryLength || length > dictionaryLength - offset)
+			throw new ArgumentOutOfRangeException(nameof(length), "The source segment must lie within the dictionary.");
+
+		// Cut the buffered (partial) window and encode it against the current segment before switching.
+		if (this._targetLength > 0)
+			this.EncodeBufferedWindow();
+
+		this._chunker.SetSourceSegment(offset, length);
+	}
+
 	private void EncodeBufferedWindow()
 	{
 		this.EncodeWindow(this._targetWindow.AsSpan(0, this._targetLength));

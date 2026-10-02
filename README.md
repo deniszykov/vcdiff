@@ -209,6 +209,31 @@ static void Decode(VcdiffSpanDecoder decoder, Stream source, Stream destination)
 }
 ```
 
+### Per-window source segments
+
+By default the streaming encoder indexes the whole dictionary. To match against only a part of it —
+and to bound the encoder index by that part rather than the whole dictionary — call
+`VcdiffSpanEncoder.SetSourceSegment(offset, length)` between `Encode` calls (RFC 3284 §4.2):
+
+```csharp
+using var encoder = new VcdiffSpanEncoder(dictionary);
+
+// Bound the index to a 32 MiB window from the very first window.
+encoder.SetSourceSegment(0, 32 * 1024 * 1024);
+
+// ... feed target bytes with Encode(...) ...
+
+// Later windows may reference a different (even overlapping or earlier) segment.
+encoder.SetSourceSegment(64 * 1024 * 1024, 32 * 1024 * 1024);
+```
+
+- Target bytes already buffered for the current window are flushed as a short window against the
+  previous segment, so the switch can land mid-window.
+- `offset`/`length` must be non-negative and lie within the dictionary, otherwise
+  `ArgumentOutOfRangeException` is thrown. A zero `length` means "no source" for those windows.
+- Not calling it is byte-identical to the previous behaviour. The stream `VcdiffEncoder` has no
+  per-window segment API.
+
 ### Dictionary sources (`ISourceReader`)
 
 Both API families read the dictionary through `ISourceReader` (in `VCDiff.Shared`) — a random-access,

@@ -101,29 +101,17 @@ internal sealed class EncoderSession : IDisposable
 	}
 
 	/// <summary>
-	///     Creates a window encoder over this session's dictionary. The dictionary is hashed on the first call.
-	///     The returned encoder must be disposed before this session.
+	///     Creates a window encoder over this session's dictionary. The shared <see cref="BlockHash" /> is created on the
+	///     first call; its tables are allocated and filled lazily by the returned encoder (on the first encoded window or
+	///     on <see cref="ChunkEncoder.SetSourceSegment" />), so a caller that restricts the source segment before encoding
+	///     never indexes the whole dictionary. The returned encoder must be disposed before this session.
 	/// </summary>
 	public ChunkEncoder CreateChunkEncoder(bool interleaved, WindowChecksumFormat checksumFormat)
 	{
 		if (this._disposed)
 			throw new ObjectDisposedException(nameof(EncoderSession));
 
-		if (this._blockHash == null)
-		{
-			var blockHash = new BlockHash(this.dictionaryReader, this._hasher, this._blockSize);
-			try
-			{
-				blockHash.AddAllBlocks();
-			}
-			catch
-			{
-				blockHash.Dispose();
-				throw;
-			}
-
-			this._blockHash = blockHash;
-		}
+		this._blockHash ??= new BlockHash(this.dictionaryReader, this._hasher, this._blockSize);
 
 		return new ChunkEncoder(this._blockHash, this.dictionaryReader.Length, this._hasher, checksumFormat, interleaved, this._minMatchSize, this._manager);
 	}

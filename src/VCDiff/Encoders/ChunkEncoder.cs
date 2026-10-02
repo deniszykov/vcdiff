@@ -12,16 +12,20 @@ namespace VCDiff.Encoders;
 /// <summary>
 ///     Finds the dictionary matches of one target window and emits it as a VCDIFF window.
 ///     Reused for every window of an encode; the <see cref="BlockHash" /> is borrowed, not owned.
+///     A source segment ([0, dictionarySize] by default) may be switched with <see cref="SetSourceSegment" />;
+///     the borrowed hash table is then rebuilt to cover only that segment.
 /// </summary>
 internal sealed class ChunkEncoder : IDisposable
 {
 	private readonly WindowChecksumFormat checksumFormat;
 
 	private readonly BlockHash dictionary;
+	private readonly long dictionarySize;
 	private readonly RabinKarpHash hasher;
 	private readonly int minMatchSize;
 	private readonly WindowEncoder windowEncoder;
 	private bool disposed;
+	private bool segmentBuilt;
 
     /// <param name="dictionary">The dictionary hash table. It is not disposed by this instance.</param>
     /// <param name="dictionarySize">The size of the data for the dictionary hash table</param>
@@ -43,8 +47,42 @@ internal sealed class ChunkEncoder : IDisposable
 		this.checksumFormat = checksumFormat;
 		this.hasher = hash;
 		this.dictionary = dictionary;
+		this.dictionarySize = dictionarySize;
 		this.minMatchSize = minMatchSize;
 		this.windowEncoder = new WindowEncoder(dictionarySize, checksumFormat, interleaved, memoryStreamManager);
+	}
+
+    /// <summary>
+    ///     Makes the windows that follow reference only the dictionary bytes
+    ///     <c>[offset, offset + length)</c>. The hash table is rebuilt to cover just that segment, so index memory is
+    ///     bounded by <paramref name="length" />. A zero <paramref name="length" /> means "no source": those windows
+    ///     are emitted without a source segment.
+    /// </summary>
+    public void SetSourceSegment(long offset, long length)
+	{
+		if (offset < 0)
+			throw new ArgumentOutOfRangeException(nameof(offset));
+		if (length < 0)
+			throw new ArgumentOutOfRangeException(nameof(length));
+		if (offset > this.dictionarySize || length > this.dictionarySize - offset)
+			throw new ArgumentOutOfRangeException(nameof(length), "The source segment must lie within the dictionary.");
+
+		this.dictionary.Reset(offset, length);
+		this.dictionary.AddAllBlocks();
+		this.windowEncoder.SetSourceSegment(offset, length);
+		this.segmentBuilt = true;
+	}
+
+	// The default full-dictionary segment is built on first use so that a caller may still call
+	// SetSourceSegment (bounding the index) before the first window is encoded.
+	private void EnsureSegmentBuilt()
+	{
+		if (this.segmentBuilt)
+			return;
+
+		this.dictionary.Reset(0, this.dictionarySize);
+		this.dictionary.AddAllBlocks();
+		this.segmentBuilt = true;
 	}
 
     /// <summary>
@@ -54,6 +92,8 @@ internal sealed class ChunkEncoder : IDisposable
     /// <param name="outputStream">The stream the encoded window is written to.</param>
     public unsafe void EncodeChunk(ReadOnlySpan<byte> window, Stream outputStream)
 	{
+		this.EnsureSegmentBuilt();
+
 		uint checksum = this.checksumFormat switch {
 			WindowChecksumFormat.Sdch => Adler32.Hash(0, window),
 			WindowChecksumFormat.Xdelta3 => Adler32.Hash(1, window),

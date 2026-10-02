@@ -28,21 +28,28 @@ internal sealed unsafe class BlockHash : IDisposable
 
 	private const int MAX_PROBES = 16;
 	private const int MAX_BYTES_PER_DICTIONARY_READ = 1 * 1024 * 1024; // 1Mib
-	private readonly int blocksCount;
 	internal readonly int BlockSize;
 	private readonly RabinKarpHash hasher;
-	private readonly ulong hashTableMask;
-
 	private readonly int maxMatchesToCheck;
 	private readonly ISourceReader dictionaryReader;
 	private bool disposed;
+
+	// The dictionary sub-range [segmentOffset, segmentOffset + segmentLength) that this table indexes.
+	// block numbers are relative to the segment, and SOffset is reported relative to it too.
+	private long segmentOffset;
+	private long segmentLength;
+
+	private int blocksCount;
+	private ulong hashTableMask;
 	private NativeAllocation<int> hashTable;
 	private int lastBlockAdded;
 	private NativeAllocation<int> lastBlockTable;
 	private NativeAllocation<int> nextBlockTable;
 
     /// <summary>
-    ///     Create a hash lookup table for the data
+    ///     Create a hash lookup table for the data. The table is sized and filled lazily by
+    ///     <see cref="Reset" /> and <see cref="AddAllBlocks" />, so no allocation is made until the segment to
+    ///     index is known.
     /// </summary>
     /// <param name="dictionaryReader">the data to create the table for</param>
     /// <param name="hasher">the hashing method</param>
@@ -53,25 +60,64 @@ internal sealed unsafe class BlockHash : IDisposable
 		this.maxMatchesToCheck = this.BlockSize >= 32 ? 32 : 32 * (32 / this.BlockSize);
 		this.hasher = hasher;
 		this.dictionaryReader = dictionaryReader;
-
-		var tableSize = this.CalcTableSize();
-		if (tableSize == 0) throw VcdiffException.BlockHashTableSizeInvalid();
-
-		this.blocksCount = (int)(dictionaryReader.Length / blockSize);
-
-		this.hashTableMask = (ulong)tableSize - 1;
-
-		this.hashTable = new NativeAllocation<int>((int)tableSize);
-		this.nextBlockTable = new NativeAllocation<int>(this.blocksCount);
-		this.lastBlockTable = new NativeAllocation<int>(this.blocksCount);
-
-		this.lastBlockAdded = -1;
-		this.SetTablesToInvalid();
 	}
 
 	~BlockHash()
 	{
 		this.Dispose();
+	}
+
+    /// <summary>
+    ///     Selects the dictionary sub-range to index and (re)sizes the tables for it. Existing allocations are
+    ///     reused when the new segment fits them. Blocks are not hashed until <see cref="AddAllBlocks" /> is called.
+    /// </summary>
+    /// <param name="segmentOffset">The start of the segment within the dictionary.</param>
+    /// <param name="segmentLength">The length of the segment. Zero means no source data.</param>
+    public void Reset(long segmentOffset, long segmentLength)
+	{
+		if (segmentOffset < 0)
+			throw new ArgumentOutOfRangeException(nameof(segmentOffset));
+		if (segmentLength < 0)
+			throw new ArgumentOutOfRangeException(nameof(segmentLength));
+		if (segmentOffset > this.dictionaryReader.Length || segmentLength > this.dictionaryReader.Length - segmentOffset)
+			throw new ArgumentOutOfRangeException(nameof(segmentLength), "The source segment must lie within the dictionary.");
+
+		this.segmentOffset = segmentOffset;
+		this.segmentLength = segmentLength;
+		this.blocksCount = (int)(segmentLength / this.BlockSize);
+
+		var tableSize = this.CalcTableSize();
+		if (tableSize == 0) throw VcdiffException.BlockHashTableSizeInvalid();
+
+		this.hashTableMask = (ulong)tableSize - 1;
+		this.EnsureCapacity((int)tableSize, this.blocksCount);
+
+		this.lastBlockAdded = -1;
+		this.SetTablesToInvalid();
+	}
+
+	private void EnsureCapacity(int tableSize, int blockCount)
+	{
+		if (this.hashTable.Pointer == null || this.hashTable.Length < tableSize)
+		{
+			var old = this.hashTable;
+			this.hashTable = new NativeAllocation<int>(tableSize);
+			old.Dispose();
+		}
+
+		if (this.nextBlockTable.Pointer == null || this.nextBlockTable.Length < blockCount)
+		{
+			var old = this.nextBlockTable;
+			this.nextBlockTable = new NativeAllocation<int>(blockCount);
+			old.Dispose();
+		}
+
+		if (this.lastBlockTable.Pointer == null || this.lastBlockTable.Length < blockCount)
+		{
+			var old = this.lastBlockTable;
+			this.lastBlockTable = new NativeAllocation<int>(blockCount);
+			old.Dispose();
+		}
 	}
 
 	private void SetTablesToInvalid()
@@ -83,7 +129,8 @@ internal sealed unsafe class BlockHash : IDisposable
 
 	private long CalcTableSize()
 	{
-		var min = this.dictionaryReader.Length / sizeof(int) + 1;
+		// One bucket per block keeps the chains short; MAX_PROBES bounds the worst case.
+		var min = (long)this.blocksCount + 1;
 		long size = 1;
 
 		while (size < min)
@@ -95,13 +142,13 @@ internal sealed unsafe class BlockHash : IDisposable
 
 		if ((size & (size - 1)) != 0) return 0;
 
-		if (this.dictionaryReader.Length > 0 && size > min * 2) return 0;
+		if (this.blocksCount > 0 && size > min * 2) return 0;
 
 		return size;
 	}
 
     /// <summary>
-    ///     Hashes every block of the dictionary into the table.
+    ///     Hashes every block of the current segment into the table.
     /// </summary>
     [SkipLocalsInit]
     public void AddAllBlocks()
@@ -116,7 +163,7 @@ internal sealed unsafe class BlockHash : IDisposable
 			// ever bridges two segments within one chunk.
 			var blocksRemaining = this.blocksCount - nextBlock;
 			var blocksInChunk = Math.Min(blocksRemaining, Math.Max(1, MAX_BYTES_PER_DICTIONARY_READ / this.BlockSize));
-			var startingOffset = (long)nextBlock * this.BlockSize;
+			var startingOffset = this.segmentOffset + (long)nextBlock * this.BlockSize;
 			var bytesToRead = (long)blocksInChunk * this.BlockSize;
 
 			foreach (var segment in this.dictionaryReader.Read(startingOffset, bytesToRead))
@@ -182,13 +229,14 @@ internal sealed unsafe class BlockHash : IDisposable
 			blockNumber >= 0 && !this.TooManyMatches(ref matchCounter);
 			blockNumber = this.SkipNonMatchingBlocks(this.nextBlockTable.Pointer[blockNumber], candidatePtr))
 		{
-			var sourceMatchOffset = (long)blockNumber * this.BlockSize;
+			var sourceMatchOffset = this.segmentOffset + (long)blockNumber * this.BlockSize;
 			var sourceMatchEnd = sourceMatchOffset + this.BlockSize;
 			var targetMatchOffset = candidateStart - targetStart;
 
 			long matchSize = this.BlockSize;
 
-			var limitBytesToLeft = Math.Min(sourceMatchOffset, targetMatchOffset);
+			// A match must never extend outside the active segment (or the target window).
+			var limitBytesToLeft = Math.Min(sourceMatchOffset - this.segmentOffset, targetMatchOffset);
 			if (limitBytesToLeft > 0)
 			{
 				var leftMatching = this.dictionaryReader.MatchBackward(sourceMatchOffset, candidatePtr, limitBytesToLeft);
@@ -197,10 +245,11 @@ internal sealed unsafe class BlockHash : IDisposable
 				matchSize += leftMatching;
 			}
 
-			var rightLimit = Math.Min(this.dictionaryReader.Length - sourceMatchEnd, targetLength - candidateEnd);
+			var rightLimit = Math.Min(this.segmentLength - (sourceMatchEnd - this.segmentOffset), targetLength - candidateEnd);
 			if (rightLimit > 0) matchSize += this.dictionaryReader.MatchForward(sourceMatchEnd, targetPtr + candidateEnd, rightLimit);
 
-			m.ReplaceIfBetterMatch(matchSize, sourceMatchOffset, targetMatchOffset);
+			// SOffset is reported relative to the segment: the COPY address of a per-window source segment.
+			m.ReplaceIfBetterMatch(matchSize, sourceMatchOffset - this.segmentOffset, targetMatchOffset);
 		}
 	}
 
@@ -236,7 +285,7 @@ internal sealed unsafe class BlockHash : IDisposable
 	{
 		var probes = 0;
 		var next = this.nextBlockTable.Pointer;
-		while (blockNumber >= 0 && !this.dictionaryReader.SequenceEqual((long)blockNumber * this.BlockSize, candidatePtr, this.BlockSize))
+		while (blockNumber >= 0 && !this.dictionaryReader.SequenceEqual(this.segmentOffset + (long)blockNumber * this.BlockSize, candidatePtr, this.BlockSize))
 		{
 			if (++probes > MAX_PROBES) return -1;
 

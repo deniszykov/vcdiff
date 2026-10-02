@@ -117,6 +117,29 @@ reads an entire stream into a pooled `Microsoft.IO.RecyclableMemoryStream` (rent
 library-wide default), i.e. into many small pooled blocks rather than one large array. The caller owns the returned stream and must dispose it **after** the
 encoder/decoder that uses its sequence.
 
+### 4.2 Restricting the source segment per window
+
+`VcdiffSpanEncoder` normally indexes the whole dictionary and gives every window a source segment of
+`[0, dictionaryLength)`. A caller that only needs to match against part of the dictionary can restrict it:
+
+```csharp
+encoder.SetSourceSegment(offset, length);
+```
+
+- Callable between `Encode` calls at any point. Target bytes already buffered for the current window are cut
+  into a short window and encoded against the *previous* segment; those delta bytes go through the usual
+  pending/drain path, so the caller keeps calling `Encode` to drain them.
+- The encoder index is rebuilt to cover only `[offset, offset + length)`, so index memory is bounded by
+  `length`, not the dictionary. To keep that bound from the very first window, call `SetSourceSegment` before
+  the first `Encode`.
+- `COPY` addresses in the windows that follow are segment-relative, and the window header carries the real
+  segment length and position (RFC 3284 §4.2). The output still decodes with any compliant decoder.
+- `offset` and `length` must be non-negative and `[offset, offset + length)` must lie within the dictionary;
+  otherwise `ArgumentOutOfRangeException` is thrown.
+- A zero `length` means "no source": those windows are emitted without a source segment (`VCD_SOURCE` is
+  omitted).
+- Not calling it is byte-identical to the previous behaviour.
+
 ## 5. Usage — driving loops
 
 ### 5.1 Encoding
@@ -205,7 +228,8 @@ static void Decode(VcdiffSpanDecoder decoder, ReadOnlySpan<byte> delta, Stream s
 ## 7. Compatibility
 
 - `VcdiffSpanEncoder` produces **byte-identical** output to `VcdiffEncoder` for the same options
-  (window boundaries are the same).
+  (window boundaries are the same), provided no source segment is set — the stream `VcdiffEncoder`
+  has no per-window source-segment API.
 - `VcdiffSpanDecoder` decodes every delta the legacy decoder accepts, including external
   xdelta3 (`-S none`) and open-vcdiff/SDCH patches — interleaved, checksummed, app-header,
   and LZMA/XZ secondary-compressed variants.
@@ -229,7 +253,7 @@ with the dictionary.
 | What | Size | Where |
 |------|------|-------|
 | Dictionary | none (referenced in place) | caller's memory, pinned |
-| Encoder dictionary index | about 1.5–2.5 × the dictionary length for `BlockSize` 16 (a hash table of `int` with one slot per 4 dictionary bytes, rounded up to a power of two, plus two `int` per block) | unmanaged, freed on `Dispose` |
+| Encoder dictionary index | about 3 `int` per dictionary block (one hash-table bucket per block, rounded up to a power of two, plus two `int` per block), i.e. ~0.75–1 × the dictionary length for `BlockSize` 16; bounded by the active source segment length when `SetSourceSegment` is used | unmanaged, freed on `Dispose` |
 | Encoder target window | `MaxWindowSizeMiB` MiB | `BytePool` |
 | Encoder window sections and pending output | up to one encoded window | pooled `RecyclableMemoryStream` blocks |
 | Decoder input buffer | 16 KiB (grows only for an oversized file header) | `BytePool` |
@@ -240,7 +264,9 @@ The decoder rejects a window whose target length or section lengths exceed `MaxT
 so a corrupt or hostile delta cannot make it rent an arbitrarily large buffer.
 
 The encoder index is the one allocation proportional to the dictionary. It is required for
-matching; if it is too large, raise `BlockSize` (the per-block part shrinks proportionally).
+matching; if it is too large, raise `BlockSize` (the per-block part shrinks proportionally), or
+restrict the active source segment with `SetSourceSegment` so the index is sized by the segment
+instead of the whole dictionary.
 
 ## Appendix A — How a segmented dictionary is read
 

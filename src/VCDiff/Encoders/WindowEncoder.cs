@@ -24,14 +24,16 @@ internal sealed class WindowEncoder : IDisposable
 	private readonly RecyclableMemoryStream addressForCopy;
 	private readonly WindowChecksumFormat checksumFormat;
 	private readonly RecyclableMemoryStream dataForAddAndRun;
-	private readonly long dictionarySize;
 	private readonly RecyclableMemoryStream instructionAndSizes;
 	private readonly InstructionMap instrMap = InstructionMap.Instance;
 	private readonly bool interleaved;
 	private uint checksum;
 	private bool disposed;
+	private bool hasSourceSegment;
 	private byte lastOpcode;
 	private int lastOpcodeIndex;
+	private long sourceSegmentLength;
+	private long sourceSegmentOffset;
 	private long targetLength;
 
 	//This is a window encoder for the VCDIFF format
@@ -40,7 +42,9 @@ internal sealed class WindowEncoder : IDisposable
 	{
 		this.checksumFormat = checksumFormat;
 		this.interleaved = interleaved;
-		this.dictionarySize = dictionarySize;
+		this.sourceSegmentLength = dictionarySize;
+		this.sourceSegmentOffset = 0;
+		this.hasSourceSegment = true; // default: the whole dictionary, exactly as before
 		this.lastOpcodeIndex = -1;
 
 		//Separate buffers for each type if not interleaved
@@ -52,6 +56,17 @@ internal sealed class WindowEncoder : IDisposable
 		}
 		else
 			this.instructionAndSizes = this.dataForAddAndRun = this.addressForCopy = manager.GetStream(nameof(WindowEncoder));
+	}
+
+    /// <summary>
+    ///     Selects the source segment (length + position within the dictionary) that the windows that follow will
+    ///     reference. A zero length emits the windows without a source segment.
+    /// </summary>
+    public void SetSourceSegment(long offset, long length)
+	{
+		this.sourceSegmentOffset = offset;
+		this.sourceSegmentLength = length;
+		this.hasSourceSegment = length > 0;
 	}
 
     /// <summary>
@@ -141,7 +156,7 @@ internal sealed class WindowEncoder : IDisposable
 	[SkipLocalsInit]
 	public void Copy(int offset, int length)
 	{
-		var mode = this.addrCache.EncodeAddress(offset, this.dictionarySize + this.targetLength, out var encodedAddr);
+		var mode = this.addrCache.EncodeAddress(offset, this.sourceSegmentLength + this.targetLength, out var encodedAddr);
 		this.EncodeInstruction(VcDiffInstructionType.COPY, length, mode);
 		if (!this.addrCache.IsSameMode(mode))
 			VarIntBe.Append(encodedAddr, this.addressForCopy);
@@ -194,12 +209,22 @@ internal sealed class WindowEncoder : IDisposable
 		var pos = 0;
 
 		//Google's Checksum Implementation Support
-		if (this.checksumFormat != WindowChecksumFormat.None)
-			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE | (byte)VcDiffWindowFlags.VCDCHECKSUM; //win indicator
+		if (this.hasSourceSegment)
+		{
+			if (this.checksumFormat != WindowChecksumFormat.None)
+				header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE | (byte)VcDiffWindowFlags.VCDCHECKSUM; //win indicator
+			else
+				header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE; //win indicator
+			pos += VarIntBe.Write(this.sourceSegmentLength, header.Slice(pos)); //source segment size
+			pos += VarIntBe.Write(this.sourceSegmentOffset, header.Slice(pos)); //source segment position
+		}
 		else
-			header[pos++] = (byte)VcDiffWindowFlags.VCDSOURCE; //win indicator
-		pos += VarIntBe.Write(this.dictionarySize, header.Slice(pos)); //dictionary size
-		pos += VarIntBe.Write(0, header.Slice(pos)); //dictionary start position 0 is default aka encompass the whole dictionary
+		{
+			// No source segment: the window is compressed by itself (RFC 3284 section 4.2).
+			header[pos++] = this.checksumFormat != WindowChecksumFormat.None
+				? (byte)VcDiffWindowFlags.VCDCHECKSUM
+				: (byte)0;
+		}
 
 		pos += VarIntBe.Write(lengthOfDelta, header.Slice(pos)); //length of delta
 
