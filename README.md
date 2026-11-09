@@ -1,11 +1,10 @@
 # vcdiff
 
-
 [![NuGet](https://img.shields.io/nuget/v/deniszykov.VCDiff)](https://www.nuget.org/packages/deniszykov.VCDiff)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/deniszykov/vcdiff/ci.yml)](https://github.com/deniszykov/vcdiff/actions?query=workflow%3ACI)
 [![Codecov](https://img.shields.io/codecov/c/github/deniszykov/vcdiff)](https://codecov.io/gh/deniszykov/vcdiff/branch/master)
 
-This is a hard fork of [VCDiff](https://github.com/Metric/VCDiff), originally written by [Metric](https://github.com/Metric), written primarily for use in Snowflake.
+This [deniszykov/vcdiff](https://github.com/deniszykov/vcdiff) is fork of [SnowflakePowered/vcdiff](https://github.com/SnowflakePowered/vcdiff) which is hard fork of [Metric/VCDiff](https://github.com/Metric/VCDiff), originally written by [Metric](https://github.com/Metric).
 
 Large chunks have been rewritten, and heavily optimized to be *extremely fast*, using vector intrinsics, as well as `Memory<byte>` and `Span<byte>` APIs as well as a sprinkling of unsafe pointer access to eke out every bit of performance possible. Non-scientific preliminary testing shows up to a 30x to 50x speedup compared to the original library when diffing a 2MB file. 
 
@@ -23,7 +22,7 @@ Support for [xdelta3](https://github.com/jmacd/xdelta) checksums have also been 
 
 Wherever possible, SSE3 or AVX2 extensions are used on supported systems. Speeds are comparable, albeit slightly slower than the native xdelta3, depending on the chosen blocksize. A lot of work has gone into optimizing out the overhead of garbage collection and memory access through `Memory<T>`, as well as parallelizing computational work with SIMD extensions.
 
-## Why this fork exists
+## Why deniszykov/vcdiff fork exists
 
 This fork modernizes and de-clutters [SnowflakePowered/vcdiff](https://github.com/SnowflakePowered/vcdiff)
 while keeping its performance:
