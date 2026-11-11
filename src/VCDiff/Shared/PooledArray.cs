@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Runtime.InteropServices;
 
 namespace VCDiff.Shared;
 
@@ -37,8 +36,8 @@ internal struct PooledArray : IDisposable
 	/// </summary>
 	public Span<byte> AsSpan()
 	{
-		// The rented array is at least Length long: skip the bounds check of AsSpan(0, Length).
-		return this.Data != null ? MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(this.Data.AsSpan()), this.Length) : Span<byte>.Empty;
+		// The rented array is at least Length long.
+		return this.Data != null ? this.Data.AsSpan(0, this.Length) : Span<byte>.Empty;
 	}
 
 	public void Dispose()

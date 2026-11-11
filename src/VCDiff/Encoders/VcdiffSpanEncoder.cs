@@ -3,6 +3,7 @@
 
 using System;
 using System.Buffers;
+using System.IO;
 using Microsoft.IO;
 using VCDiff.Shared;
 

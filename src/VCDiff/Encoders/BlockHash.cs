@@ -150,7 +150,7 @@ internal sealed unsafe class BlockHash : IDisposable
 			// One bucket per block is the smallest table; the multiplier over-allocates beyond that. Probing
 			// stays bounded by MAX_PROBES / maxMatchesToCheck, so a smaller table trades ratio for memory.
 			var buckets = this.hashTableSizeMultiplier * this.blocksCount;
-			if (!double.IsFinite(buckets) || buckets >= int.MaxValue) return 0;
+			if (double.IsNaN(buckets) || double.IsInfinity(buckets) || buckets >= int.MaxValue) return 0;
 
 			if (buckets < 1) buckets = 1;
 
@@ -244,7 +244,7 @@ internal sealed unsafe class BlockHash : IDisposable
     /// <param name="targetPtr">pointer to the target buffer</param>
     /// <param name="targetLength">the length of the target buffer</param>
     /// <param name="m">the match object to use</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization), SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptionsCompat.AggressiveOptimization), SkipLocalsInit]
 	public void FindBestMatch(ulong hash, long candidateStart, long targetStart, byte* targetPtr, long targetLength, ref Match m)
 	{
 		var matchCounter = 0;
@@ -306,7 +306,7 @@ internal sealed unsafe class BlockHash : IDisposable
 		this.lastBlockAdded = blockNumber;
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization), SkipLocalsInit]
+	[MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptionsCompat.AggressiveOptimization), SkipLocalsInit]
 	private int SkipNonMatchingBlocks(int blockNumber, byte* candidatePtr)
 	{
 		var probes = 0;

@@ -4,8 +4,10 @@
 using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
+#if NETCOREAPP3_0_OR_GREATER
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace VCDiff.Encoders;
 
@@ -27,7 +29,9 @@ public class RabinKarpHash : IDisposable
 
 	private readonly ulong[] removeTable;
 
+#if NETCOREAPP3_0_OR_GREATER
 	private readonly Vector256<int> vShuf;
+#endif
 	private MemoryHandle kMultFactorsHandle;
 
     /// <summary>
@@ -42,7 +46,9 @@ public class RabinKarpHash : IDisposable
     /// <param name="blockSize">The number of bytes hashed at a time (the block size).</param>
     public RabinKarpHash(int blockSize)
 	{
+#if NETCOREAPP3_0_OR_GREATER
 		this.vShuf = Vector256.Create(7, 6, 5, 4, 3, 2, 1, 0);
+#endif
 		this.BlockSize = blockSize;
 		this.removeTable = new ulong[256];
 		this.kMultFactors = new int[blockSize];
@@ -71,6 +77,7 @@ public class RabinKarpHash : IDisposable
 		}
 	}
 
+#if NETCOREAPP3_0_OR_GREATER
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private unsafe ulong HashAvx2(byte* buf, int len)
 	{
@@ -134,6 +141,7 @@ public class RabinKarpHash : IDisposable
 
 		return h & (K_BASE - 1);
 	}
+#endif
     /// <summary>
     ///     Generate a new hash from the bytes
     ///     The formula for calculating h is
@@ -144,14 +152,16 @@ public class RabinKarpHash : IDisposable
     ///     h(n) = Sum(i: 0, n: len - 1, i => kMult ** (len - i - 1) span[i])
     ///     The final result is then MODded using binary and with kBase.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
 	internal unsafe ulong Hash(byte* buf, int len)
 	{
 		if (len == 0) return 1;
 		if (len == 1) return buf[0] * (uint)K_MULT;
 
+#if NETCOREAPP3_0_OR_GREATER
 		if (Avx2.IsSupported && len >= 8) return this.HashAvx2(buf, len);
 		if (Sse41.IsSupported && len >= 4) return this.HashSse(buf, len);
+#endif
 
 		ulong h = 0;
 

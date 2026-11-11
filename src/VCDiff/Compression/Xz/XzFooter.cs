@@ -13,7 +13,7 @@ namespace VCDiff.Compression.Xz;
 internal static class XzFooter
 {
 	private const int SIZE = 12;
-	private static ReadOnlySpan<byte> MagicBytes => "YZ"u8;
+	private static readonly byte[] MagicBytes = { (byte)'Y', (byte)'Z' };
 
 	/// <summary>
 	///     Reads and validates the stream footer against the header's check type and the size of the index that

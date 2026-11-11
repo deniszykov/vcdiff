@@ -53,7 +53,7 @@ internal sealed class XzBlock : ReadOnlyStream
 		this._startPosition = stream.Position;
 	}
 
-	public override int Read(Span<byte> buffer)
+	internal override int ReadCore(Span<byte> buffer)
 	{
 		var bytesRead = 0;
 		if (!this._headerIsLoaded) this.LoadHeader();

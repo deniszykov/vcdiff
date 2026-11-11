@@ -64,7 +64,7 @@ internal static class VarIntBe
 	/// </summary>
 	public static ParseResult TryParseInt32(in ReadOnlySequence<byte> sequence, out int value, out int bytesConsumed)
 	{
-		var first = sequence.FirstSpan;
+		var first = sequence.First.Span;
 		if (first.Length >= MAX_INT32_LENGTH || sequence.IsSingleSegment)
 			return TryParseInt32(first, out value, out bytesConsumed);
 

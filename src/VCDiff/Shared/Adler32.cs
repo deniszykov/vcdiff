@@ -3,8 +3,10 @@
 
 using System;
 using System.Runtime.CompilerServices;
+#if NETCOREAPP3_0_OR_GREATER
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace VCDiff.Shared;
 
@@ -22,6 +24,7 @@ internal static class Adler32
 
 	private const byte S23_O1 = (2 << 6) | (3 << 4) | (0 << 2) | 1;
 
+#if NETCOREAPP3_0_OR_GREATER
 	private static readonly Vector256<sbyte> Tap;
 
 	private static readonly Vector128<sbyte> Tap1;
@@ -41,6 +44,7 @@ internal static class Adler32
 			Tap2 = Vector128.Create(16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1);
 		}
 	}
+#endif
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private static void Do(ref uint adler, ref uint sum2, ReadOnlySpan<byte> buffer, int i, int times)
@@ -52,6 +56,7 @@ internal static class Adler32
 		}
 	}
 
+#if NETCOREAPP3_0_OR_GREATER
     /// <summary>
     ///     SSSE3 Version of Adler32
     ///     https://chromium.googlesource.com/chromium/src/third_party/zlib/+/master/adler32_simd.c
@@ -249,6 +254,8 @@ internal static class Adler32
 		}
 	}
 
+#endif
+
 	/// <summary>
 	///     Feeds <paramref name="buff" /> into the running Adler-32 value <paramref name="adler" />.
 	/// </summary>
@@ -290,8 +297,10 @@ internal static class Adler32
 			return adler | (sum2 << 16);
 		}
 
+#if NETCOREAPP3_0_OR_GREATER
 		if (Avx2.IsSupported) return HashAvx2(adler, buff);
 		if (Ssse3.IsSupported) return HashSsse3(adler, buff);
+#endif
 
 		unsafe
 		{

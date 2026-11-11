@@ -44,7 +44,7 @@ internal sealed class CustomCodeTableDecoder
 
 		codeTable = codeTable.Slice(0, lengthOfCodeTable);
 		if (codeTable.IsSingleSegment)
-			return this.DecodeCore(codeTable.FirstSpan);
+			return this.DecodeCore(codeTable.First.Span);
 
 		// Rare multi-segment case: consolidate the (small) code table into a pooled contiguous buffer.
 		var rented = this._bytePool.Rent(lengthOfCodeTable);

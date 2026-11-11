@@ -82,10 +82,17 @@ internal sealed class ReadOnlySequenceStream : Stream
 
 	public override int Read(byte[] buffer, int offset, int count)
 	{
-		return this.Read(buffer.AsSpan(offset, count));
+		return this.ReadCore(buffer.AsSpan(offset, count));
 	}
 
+#if !NETSTANDARD2_0
 	public override int Read(Span<byte> buffer)
+	{
+		return this.ReadCore(buffer);
+	}
+#endif
+
+	internal int ReadCore(Span<byte> buffer)
 	{
 		var total = 0;
 		while (total < buffer.Length)

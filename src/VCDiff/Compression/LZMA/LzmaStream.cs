@@ -75,10 +75,17 @@ internal sealed class LzmaStream : Stream
 
 	public override int Read(byte[] buffer, int offset, int count)
 	{
-		return this.Read(buffer.AsSpan(offset, count));
+		return this.ReadCore(buffer.AsSpan(offset, count));
 	}
 
+#if !NETSTANDARD2_0
 	public override int Read(Span<byte> buffer)
+	{
+		return this.ReadCore(buffer);
+	}
+#endif
+
+	internal int ReadCore(Span<byte> buffer)
 	{
 		if (this._endReached) return 0;
 

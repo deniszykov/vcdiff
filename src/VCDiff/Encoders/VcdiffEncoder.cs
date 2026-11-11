@@ -149,7 +149,7 @@ public class VcdiffEncoder : IDisposable
 				if (bytesRead == 0)
 					break;
 
-				chunker.EncodeChunk(window[..bytesRead], this._outputStream);
+				chunker.EncodeChunk(window.Slice(0, bytesRead), this._outputStream);
 				progress?.Report((float)this._targetData.Position / this.TargetLength);
 			}
 
@@ -198,7 +198,7 @@ public class VcdiffEncoder : IDisposable
 				if (read == 0)
 					break;
 
-				chunker.EncodeChunk(window.Span[..read], this._outputStream);
+				chunker.EncodeChunk(window.Span.Slice(0, read), this._outputStream);
 				progress?.Report((float)this._targetData.Position / this.TargetLength);
 			}
 

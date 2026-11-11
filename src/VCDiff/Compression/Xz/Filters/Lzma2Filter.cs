@@ -13,6 +13,7 @@ internal sealed class Lzma2Filter : BlockFilter
 	private const int MAX_DICTIONARY_SIZE_PROPERTY = 40;
 
 	private byte _dictionarySizeProperty;
+	private LzmaStream? _lzmaStream;
 	public override bool AllowAsLast => true;
 	public override bool AllowAsNonLast => false;
 	public override bool ChangesDataSize => true;
@@ -32,12 +33,13 @@ internal sealed class Lzma2Filter : BlockFilter
 	{
 		// The LZMA stream is owned by this filter (disposed with it); the block input stream is not.
 		this.BaseStream?.Dispose();
-		this.BaseStream = new LzmaStream(this._dictionarySizeProperty, stream, this.BytePool);
+		this._lzmaStream = new LzmaStream(this._dictionarySizeProperty, stream, this.BytePool);
+		this.BaseStream = this._lzmaStream;
 	}
 
-	public override int Read(Span<byte> buffer)
+	internal override int ReadCore(Span<byte> buffer)
 	{
-		return this.BaseStream.Read(buffer);
+		return this._lzmaStream!.ReadCore(buffer);
 	}
 
 	public override int ReadByte()

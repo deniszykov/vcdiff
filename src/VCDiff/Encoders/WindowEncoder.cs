@@ -92,7 +92,7 @@ internal sealed class WindowEncoder : IDisposable
 		this.instructionAndSizes.Position = end;
 	}
 
-	[MethodImpl(MethodImplOptions.AggressiveOptimization)]
+	[MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
 	private void EncodeInstruction(VcDiffInstructionType inst, int size, byte mode = 0)
 	{
 		if (this.lastOpcodeIndex >= 0)

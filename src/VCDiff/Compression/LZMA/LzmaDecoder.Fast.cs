@@ -176,18 +176,24 @@ internal sealed partial class LzmaDecoder
 	private void InitFastModel()
 	{
 		const ushort PROB_INIT = (ushort)(RangeDecoder.K_BIT_MODEL_TOTAL >> 1);
-		Array.Fill(this._fIsMatch, PROB_INIT);
-		Array.Fill(this._fIsRep, PROB_INIT);
-		Array.Fill(this._fIsRepG0, PROB_INIT);
-		Array.Fill(this._fIsRepG1, PROB_INIT);
-		Array.Fill(this._fIsRepG2, PROB_INIT);
-		Array.Fill(this._fIsRep0Long, PROB_INIT);
-		Array.Fill(this._fPosSlot, PROB_INIT);
-		Array.Fill(this._fPosDecoders, PROB_INIT);
-		Array.Fill(this._fPosAlign, PROB_INIT);
-		Array.Fill(this._fLenProbs, PROB_INIT);
-		Array.Fill(this._fRepLenProbs, PROB_INIT);
-		Array.Fill(this._fLiteral, PROB_INIT);
+		Fill(this._fIsMatch, PROB_INIT);
+		Fill(this._fIsRep, PROB_INIT);
+		Fill(this._fIsRepG0, PROB_INIT);
+		Fill(this._fIsRepG1, PROB_INIT);
+		Fill(this._fIsRepG2, PROB_INIT);
+		Fill(this._fIsRep0Long, PROB_INIT);
+		Fill(this._fPosSlot, PROB_INIT);
+		Fill(this._fPosDecoders, PROB_INIT);
+		Fill(this._fPosAlign, PROB_INIT);
+		Fill(this._fLenProbs, PROB_INIT);
+		Fill(this._fRepLenProbs, PROB_INIT);
+		Fill(this._fLiteral, PROB_INIT);
+	}
+
+	// Array.Fill<T> is not available on netstandard2.0; fill the (reused) probability tables with a loop.
+	private static void Fill(ushort[] array, ushort value)
+	{
+		for (var i = 0; i < array.Length; i++) array[i] = value;
 	}
 
 	internal unsafe bool CodeFast

@@ -36,7 +36,7 @@ internal sealed class XzStream : ReadOnlyStream
 		base.Dispose(disposing);
 	}
 
-	public override int Read(Span<byte> buffer)
+	internal override int ReadCore(Span<byte> buffer)
 	{
 		var bytesRead = 0;
 		if (this._endOfStream) return bytesRead;
@@ -84,7 +84,7 @@ internal sealed class XzStream : ReadOnlyStream
 				if (bytesRead >= count) break;
 
 				var remaining = count - bytesRead;
-				var justRead = this._currentBlock!.Read(buffer.Slice(bytesRead, remaining));
+				var justRead = this._currentBlock!.ReadCore(buffer.Slice(bytesRead, remaining));
 				if (justRead < remaining) this.NextBlock();
 
 				bytesRead += justRead;

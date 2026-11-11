@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace VCDiff.Shared;
@@ -96,7 +95,16 @@ public sealed unsafe class SequenceSourceReader : ISourceReader
 		if (this.starts[count] - this.starts[count - 1] > size)
 			return -1;
 
-		return BitOperations.Log2((ulong)size);
+		return Log2((ulong)size);
+	}
+
+	// Equivalent of System.Numerics.BitOperations.Log2, which is not available on netstandard2.0.
+	// `value` is a power of two (validated by the caller), so this is the bit index of its single set bit.
+	private static int Log2(ulong value)
+	{
+		var log = 0;
+		while ((value >>= 1) != 0) log++;
+		return log;
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]

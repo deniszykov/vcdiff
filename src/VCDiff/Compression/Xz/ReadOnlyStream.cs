@@ -36,10 +36,17 @@ internal abstract class ReadOnlyStream : Stream
 
 	public override int Read(byte[] buffer, int offset, int count)
 	{
-		return this.Read(buffer.AsSpan(offset, count));
+		return this.ReadCore(buffer.AsSpan(offset, count));
 	}
 
-	public abstract override int Read(Span<byte> buffer);
+	internal abstract int ReadCore(Span<byte> buffer);
+
+#if !NETSTANDARD2_0
+	public override int Read(Span<byte> buffer)
+	{
+		return this.ReadCore(buffer);
+	}
+#endif
 
 	public override void Flush()
 	{
