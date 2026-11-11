@@ -30,8 +30,9 @@ while keeping its performance:
 - **Lighter dependencies and smaller build** — the ~2 MiB `SharpCompress` package was replaced with a
   minimal, vendored XZ/LZMA2 decompressor, and unused packages were dropped, shrinking the deployed
   footprint by ~95%.
-- **Modern, focused targets** — `netcoreapp3.1` and `net8.0` only, with legacy `netstandard`
-  targets and their `#if` fallbacks removed.
+- **Broad target support** — `netstandard2.0`, `netcoreapp3.1`, and `net8.0`. `netstandard2.0`
+  brings .NET Framework 4.6.1+ (and Unity/Xamarin) support; the SIMD intrinsics paths are gated so
+  that target uses scalar fallbacks while `netcoreapp3.1`/`net8.0` keep the vectorized fast paths.
 - **Modern, allocation-conscious APIs** — configurable buffer pooling
   (`VcdiffEncoderOptions`/`VcdiffDecoderOptions`) and a streaming span-based encode/decode API
   (`VcdiffSpanEncoder`/`VcdiffSpanDecoder`).
@@ -44,8 +45,8 @@ The code in this repository was developed and reviewed with the assistance of LL
 
 This fork keeps the fast SIMD/unsafe encode and decode paths from upstream while trimming the dependency surface:
 
-- **Target frameworks**: `netcoreapp3.1` and `net8.0` only (the `netstandard2.0` and `netstandard2.1` targets were removed).
-- **Dependencies**: only `Microsoft.IO.RecyclableMemoryStream`. The `SharpCompress` package and its transitive dependencies, as well as `Newtonsoft.Json`, `System.Text.RegularExpressions`, `PolyShim`, and `System.Runtime.CompilerServices.Unsafe`, were removed.
+- **Target frameworks**: `netstandard2.0`, `netcoreapp3.1`, and `net8.0`. `netstandard2.0` covers .NET Framework 4.6.1+, .NET Core 2.0+, Unity, and Xamarin.
+- **Dependencies**: only `Microsoft.IO.RecyclableMemoryStream` on `netcoreapp3.1`/`net8.0`; the `netstandard2.0` build additionally references `System.Memory`, `System.Buffers`, `System.Numerics.Vectors`, and `System.Runtime.CompilerServices.Unsafe`. The `SharpCompress` package and its transitive dependencies, as well as `Newtonsoft.Json`, `System.Text.RegularExpressions`, and `PolyShim`, were removed.
 - **Smaller build**: instead of depending on the whole `SharpCompress` package, only a minimal XZ/LZMA2 *decompressor* is vendored into the library (decode-only, LZMA2 filter, using the unsafe/SIMD fast decode loop). This supports the xdelta secondary-compression path and drops all of SharpCompress's archive readers/writers and unrelated compressors.
 
   | | `VCDiff.dll` netcoreapp3.1 | `VCDiff.dll` net8.0 | total deployed |
